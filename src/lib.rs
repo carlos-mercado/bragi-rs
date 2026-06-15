@@ -34,7 +34,6 @@ impl From<&Album> for Text<'static> {
             album.artist, album.album
         ))
     }
-
 }
 
 impl From<TrackDetails> for Text<'static> {
