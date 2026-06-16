@@ -11,8 +11,8 @@ use std::collections::{BTreeSet, HashMap};
 pub struct Album {
     artist: String,
     album: String,
-    //duration: u64,
     selected: bool,
+    date: String,
     pub songs: BTreeSet<TrackDetails>
 }
 
@@ -30,8 +30,8 @@ pub struct TrackDetails {
 impl From<&Album> for Text<'static> {
     fn from(album: &Album) -> Self {
         Text::from(format!(
-            "{} - {}",
-            album.artist, album.album
+            "{} - {} [{}]",
+            album.artist, album.album, album.date
         ))
     }
 }
@@ -70,6 +70,7 @@ pub fn build_albums(tracks: &Vec<TrackDetails>) -> Vec<Album> {
         albums.push(Album {
             artist: artist.to_string(),
             album: album.to_string(),
+            date: songs.first().map_or("Unknown Date".to_string(), |d| d.date.clone()),
             selected: false,
             songs,
         });

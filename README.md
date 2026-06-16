@@ -17,3 +17,10 @@
 - `Enter`:
   - if in search mode: Move into playlist with songs selected by search buffer.
   - if in normal mode: Open an album, or play a song.
+
+
+### TODO
+- Add statistics like `time_played` for artists, albums, songs
+- Add statistics to `~/.local/share/bragi-rs/history.json`
+- Add `config` file support.
+- Add `config` file to `~/.config/bargi-rs`.

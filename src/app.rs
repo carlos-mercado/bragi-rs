@@ -119,7 +119,7 @@ impl App {
                         self.counter = (self.albums.len() - 1) as u32;
                     }
                     else {
-                        self.counter = (self.songs.len() - 1) as u32;
+                        self.counter = (self.album_selected.clone().unwrap().len() - 1) as u32;
                     }
                 }
                 KeyCode::Char('p') => {
