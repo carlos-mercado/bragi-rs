@@ -26,7 +26,7 @@ impl Widget for &App {
 
         let binding = Arc::clone(&self.playback_mode);
         let state = binding.lock().unwrap();
-        if let Some(selected_track) = &self.song_selected {
+        if let Some(selected_track) = &self.playing_song {
             if *state == PlaybackMode::Playing || *state == PlaybackMode::Paused {
                 Paragraph::new(Text::from(selected_track))
                     .centered()
@@ -82,8 +82,9 @@ impl Widget for &App {
                 .label("")
                 .filled_symbol(symbols::line::THICK_HORIZONTAL)
                 .ratio(
-                    self.get_time_elapsed().as_secs_f64()
-                        / self.song_selected.clone().unwrap().duration as f64,
+                    (self.get_time_elapsed().as_secs_f64()
+                        / self.playing_song.as_ref().unwrap().duration as f64)
+                        .min(1.0)
                 );
             progress_bar.render(progress_bar_area, buf);
         }

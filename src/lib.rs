@@ -5,7 +5,7 @@ use std::cmp::Ord;
 use std::fs::{self, DirEntry};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{HashMap};
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Album {
@@ -13,7 +13,7 @@ pub struct Album {
     album: String,
     selected: bool,
     date: String,
-    pub songs: BTreeSet<TrackDetails>
+    pub songs: Vec<TrackDetails>
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -57,16 +57,17 @@ impl From<&TrackDetails> for Text<'static> {
 
 pub fn build_albums(tracks: &Vec<TrackDetails>) -> Vec<Album> {
     // (artist, album) => 
-    let mut album_to_songs: HashMap<(&String, &String), BTreeSet<TrackDetails>> = HashMap::new();
+    let mut album_to_songs: HashMap<(&String, &String), Vec<TrackDetails>> = HashMap::new();
     for track in tracks {
         album_to_songs
             .entry((&track.artist, &track.album))
-            .or_default()
-            .insert(track.clone());
+            .or_insert(Vec::new())
+            .push(track.clone());
     }
 
     let mut albums = Vec::new();
-    for ((artist, album), songs) in album_to_songs {
+    for ((artist, album), mut songs) in album_to_songs {
+        songs.sort();
         albums.push(Album {
             artist: artist.to_string(),
             album: album.to_string(),

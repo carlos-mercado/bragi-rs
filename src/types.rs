@@ -1,4 +1,4 @@
-use music::TrackDetails;
+use music::{ TrackDetails };
 
 #[derive(PartialEq)]
 pub enum VimMode {
@@ -14,6 +14,8 @@ pub enum PlaybackMode {
 }
 
 pub enum MusicStreamEvent {
-    NewSongEvent(TrackDetails),
+    //NewSongEvent(TrackDetails),
+    NewPlaylistEvent(Vec<TrackDetails>),
     PlaybackEvent(PlaybackMode),
+    TrackAutoAdvanced(TrackDetails),
 }

@@ -6,7 +6,6 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-use std::collections::{BTreeSet};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::DefaultTerminal;
@@ -14,18 +13,19 @@ use ratatui::Frame;
 
 use music::{TrackDetails, Album, build_albums, filter_tracks, get_music_files};
 use crate::types::{MusicStreamEvent, PlaybackMode, VimMode};
+//use crate::init;
 
 pub struct App {
     pub counter: u32,
     pub exit: bool,
     pub songs: Vec<TrackDetails>,
     pub albums: Vec<Album>,
-    pub song_selected: Option<TrackDetails>,
-    pub album_selected: Option<BTreeSet<TrackDetails>>,
+    pub playing_song: Option<TrackDetails>,
+    pub album_selected: Option<Vec<TrackDetails>>,
     pub play_start: Option<Instant>,
     pub elapsed_before_paused: Duration,
-    pub sender: Sender<MusicStreamEvent>,
-    pub receiver: Option<Receiver<MusicStreamEvent>>,
+    pub sender: Sender<(MusicStreamEvent, usize)>,
+    pub receiver: Option<Receiver<(MusicStreamEvent, usize)>>,
     pub mode: VimMode,
     pub playback_mode: Arc<Mutex<PlaybackMode>>,
     pub audio_handle: rodio::MixerDeviceSink,
@@ -33,6 +33,7 @@ pub struct App {
     pub unfiltered_songs: Vec<TrackDetails>,
     pub last_key: char,
     pub key_pressed_time: Instant,
+    pub playback_event_receiver: Option<Receiver<MusicStreamEvent>>,
 }
 
 impl App {
@@ -44,7 +45,7 @@ impl App {
         let albums = build_albums(&songs_vec_clone);
         let audio_handle = rodio::DeviceSinkBuilder::open_default_sink()
             .expect("Could not find default audio stream");
-        let (sender, receiver): (Sender<MusicStreamEvent>, Receiver<MusicStreamEvent>) = channel();
+        let (sender, receiver): (Sender<(MusicStreamEvent, usize)>, Receiver<(MusicStreamEvent, usize)>) = channel();
         let play_start = None;
         let elapsed_before_paused = Duration::from_secs(0);
         let playback_mode = Arc::new(Mutex::new(PlaybackMode::NotPlaying));
@@ -54,7 +55,7 @@ impl App {
             exit: false,
             songs: songs_vec,
             albums,
-            song_selected: None,
+            playing_song: None,
             album_selected: None,
             play_start,
             elapsed_before_paused,
@@ -67,6 +68,7 @@ impl App {
             unfiltered_songs: songs_vec_clone,
             last_key: ' ',
             key_pressed_time: Instant::now(),
+            playback_event_receiver: None,
         };
 
         app.playback();
@@ -86,6 +88,14 @@ impl App {
     }
 
     fn handle_events(&mut self) -> io::Result<()> {
+        if let Some(ref rx) = self.playback_event_receiver {
+            if let Ok(MusicStreamEvent::TrackAutoAdvanced(i)) = rx.try_recv() {
+                self.play_start = Some(Instant::now());
+                self.elapsed_before_paused = Duration::from_secs(0);
+                self.playing_song = Some(i);
+            }
+        }
+
         if event::poll(Duration::from_millis(500))? {
             match event::read()? {
                 Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
@@ -130,14 +140,14 @@ impl App {
                         PlaybackMode::Playing => {
                             *state = PlaybackMode::Paused;
                             self.sender
-                                .send(MusicStreamEvent::PlaybackEvent(PlaybackMode::Paused))
+                                .send(( MusicStreamEvent::PlaybackEvent(PlaybackMode::Paused), 0 ))
                                 .expect("Could not send through channel");
                             self.elapsed_before_paused += self.play_start.unwrap().elapsed();
                         }
                         PlaybackMode::Paused => {
                             *state = PlaybackMode::Playing;
                             self.sender
-                                .send(MusicStreamEvent::PlaybackEvent(PlaybackMode::Playing))
+                                .send(( MusicStreamEvent::PlaybackEvent(PlaybackMode::Playing), 0 ))
                                 .expect("Could not send through channel");
                             self.play_start = Some(Instant::now());
                         }
@@ -160,17 +170,9 @@ impl App {
                         // user chose a song
                         let binding = Arc::clone(&self.playback_mode);
                         let mut state = binding.lock().unwrap();
-                        self.song_selected = self.album_selected
-                            .as_ref()
-                            .and_then(|set| set
-                                .iter()
-                                .nth(self.counter as usize)
-                                .cloned()
-                            );
-
-                        let selected = self.song_selected.clone();
+                        self.playing_song = self.album_selected.as_ref().map(|songs| songs[self.counter as usize].clone());
                         self.sender
-                            .send(MusicStreamEvent::NewSongEvent(selected.unwrap()))
+                            .send(( MusicStreamEvent::NewPlaylistEvent(self.album_selected.clone().unwrap()), self.counter as usize ))
                             .expect("Could not send through channel");
                         *state = PlaybackMode::Playing;
                         self.play_start = Some(Instant::now());
@@ -188,9 +190,8 @@ impl App {
                     self.counter = 0;
                 }
                 KeyCode::Backspace => {
-                    if self.search_buff.is_empty() {
-                        return;
-                    }
+                    if self.search_buff.is_empty() { return; }
+
                     self.search_buff.pop();
                     self.songs = self.filter_songs();
                     self.counter = 0;
@@ -201,8 +202,8 @@ impl App {
                     self.album_selected = Some(self.songs
                         .iter()
                         .cloned()
-                        .collect::<BTreeSet<_>>()
-                        );
+                        .collect::<Vec<_>>()
+                    );
                 }
                 KeyCode::Esc => {
                     self.counter = 0;
@@ -241,27 +242,32 @@ impl App {
     }
 
     fn playback(&mut self) {
+        let (track_sender, track_receiver) = channel::<MusicStreamEvent>();
+        self.playback_event_receiver = Some(track_receiver);
+
         let Some(receiver) = self.receiver.take() else {
             return;
         };
         let mixer = self.audio_handle.mixer().clone();
-        let binding = Arc::clone(&self.playback_mode);
+        let playback_mode = Arc::clone(&self.playback_mode);
 
         let _thread_handle = thread::spawn(move || {
-            let mut current_track = match receiver.recv() {
-                Ok(MusicStreamEvent::NewSongEvent(track_info)) => track_info,
-                Ok(MusicStreamEvent::PlaybackEvent(_)) => return,
-                Err(_) => return,
+            let ( mut playlist, mut track_no ) = match receiver.recv() {
+                Ok( 
+                    ( MusicStreamEvent::NewPlaylistEvent(playlist), track_no ) 
+                ) => ( playlist, track_no ),
+                _ => return,
             };
 
-            loop {
-                let song_path = current_track.song_path.clone();
+            'song_loop : loop {
+                let current_track = playlist[track_no].clone();
+                let song_path = current_track.song_path;
                 let file = BufReader::new(File::open(song_path).unwrap());
                 let mut song_time_remaining = Duration::from_secs(current_track.duration);
                 let player = rodio::play(&mixer, file).unwrap();
-
                 let mut is_paused = false;
-                loop {
+
+                '_playback_loop: loop {
                     let now = Instant::now();
 
                     let event = if is_paused {
@@ -274,12 +280,13 @@ impl App {
                     };
 
                     match event {
-                        Ok(MusicStreamEvent::NewSongEvent(new_track_info)) => {
+                        Ok((MusicStreamEvent::NewPlaylistEvent(new_playlist), new_idx)) => {
                             std::mem::drop(player);
-                            current_track = new_track_info;
-                            break;
-                        }
-                        Ok(MusicStreamEvent::PlaybackEvent(mode)) => match mode {
+                            playlist = new_playlist;
+                            track_no = new_idx;
+                            continue 'song_loop;
+                        },
+                        Ok((MusicStreamEvent::PlaybackEvent(mode), _)) => match mode {
                             PlaybackMode::Paused => {
                                 player.pause();
                                 is_paused = true;
@@ -292,13 +299,26 @@ impl App {
                             }
                             _ => {}
                         },
-                        Err(RecvTimeoutError::Timeout) => {
-                            // played song to it's conclusion
-                            // clean up app state
-                            let mut state = binding.lock().unwrap();
-                            *state = PlaybackMode::NotPlaying;
+                        Ok((MusicStreamEvent::TrackAutoAdvanced(_), _)) => {
+                            todo!()
                         }
-                        Err(_) => {}
+                        Err(RecvTimeoutError::Timeout) => {
+                            // played playlist to it's conclusion
+                            // clean up app state
+                            if track_no == playlist.len() - 1 {
+                                let mut state = playback_mode.lock().unwrap();
+                                *state = PlaybackMode::NotPlaying;
+                            }
+                            // if there is we are not at the last song
+                            // in the playlist, play the next song.
+                            else {
+                                std::mem::drop(player);
+                                track_no += 1;
+                                track_sender.send(MusicStreamEvent::TrackAutoAdvanced(playlist[track_no].clone())).ok();
+                                continue 'song_loop;
+                            }
+                        },
+                        Err(_) => {},
                     }
                 }
             }
