@@ -11,9 +11,11 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::DefaultTerminal;
 use ratatui::Frame;
 
-use music::{TrackDetails, Album, build_albums, filter_tracks, get_music_files};
+use music::{Album, TrackDetails, build_albums, filter_tracks, get_music_files };
+use redb::Database;
+use crate::config::config_init;
 use crate::types::{MusicStreamEvent, PlaybackMode, VimMode};
-//use crate::init;
+use crate::db::*;
 
 pub struct App {
     pub counter: u32,
@@ -34,12 +36,16 @@ pub struct App {
     pub last_key: char,
     pub key_pressed_time: Instant,
     pub playback_event_receiver: Option<Receiver<MusicStreamEvent>>,
+    pub db: Option<Database>,
 }
 
 impl App {
     pub fn new() -> App {
+        let config = config_init();
+        let db = db_setup();
+
         let mut songs_vec: Vec<TrackDetails> = vec![];
-        get_music_files(Path::new("/home/carlos/Music"), &mut songs_vec).unwrap();
+        get_music_files(Path::new(&config.music_path), &mut songs_vec, &db).unwrap();
         songs_vec.sort();
         let songs_vec_clone = songs_vec.clone();
         let albums = build_albums(&songs_vec_clone);
@@ -69,6 +75,7 @@ impl App {
             last_key: ' ',
             key_pressed_time: Instant::now(),
             playback_event_receiver: None,
+            db,
         };
 
         app.playback();
@@ -170,11 +177,16 @@ impl App {
                         // user chose a song
                         let binding = Arc::clone(&self.playback_mode);
                         let mut state = binding.lock().unwrap();
-                        self.playing_song = self.album_selected.as_ref().map(|songs| songs[self.counter as usize].clone());
+                        self.playing_song = self.album_selected
+                            .as_ref()
+                            .map(|songs| songs[self.counter as usize].clone());
                         self.sender
                             .send(( MusicStreamEvent::NewPlaylistEvent(self.album_selected.clone().unwrap()), self.counter as usize ))
                             .expect("Could not send through channel");
                         *state = PlaybackMode::Playing;
+                        if let Some(database) = &self.db {
+                            read_or_insert(&database, &self.playing_song.as_ref().unwrap().song_path).unwrap();
+                        }
                         self.play_start = Some(Instant::now());
                         self.elapsed_before_paused = Duration::from_secs(0);
                     }
@@ -229,7 +241,7 @@ impl App {
             self.counter = std::cmp::min((self.albums.len() - 1) as u32, self.counter + 1);
         }
         else {
-            self.counter = std::cmp::min((self.songs.len() - 1) as u32, self.counter + 1);
+            self.counter = std::cmp::min((self.album_selected.as_ref().unwrap().len() - 1) as u32, self.counter + 1);
         }
     }
 

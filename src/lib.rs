@@ -1,14 +1,22 @@
 use lofty::file::TaggedFile;
 use lofty::{prelude::*, read_from_path};
 use ratatui::prelude::{Text};
+use redb::Database;
 use std::cmp::Ord;
 use std::fs::{self, DirEntry};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::collections::{HashMap};
+use dirs;
+use serde::{Deserialize};
+
+mod db;
+use crate::db::*;
+
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Album {
+    last_played: u64,
     artist: String,
     album: String,
     selected: bool,
@@ -25,6 +33,7 @@ pub struct TrackDetails {
     pub date: String,
     pub song_path: String,
     pub duration: u64,
+    pub last_played: u64,
 }
 
 impl From<&Album> for Text<'static> {
@@ -52,23 +61,31 @@ impl From<&TrackDetails> for Text<'static> {
             track.artist, track.title, track.date, track.track_no,
         ))
     }
-
 }
 
 pub fn build_albums(tracks: &Vec<TrackDetails>) -> Vec<Album> {
-    // (artist, album) => 
+    // (artist album) => time when the MRU track was played
+    let mut album_to_mru_track: HashMap<(&String, &String), u64> = HashMap::new();
+    // (artist, album) => album_songs
     let mut album_to_songs: HashMap<(&String, &String), Vec<TrackDetails>> = HashMap::new();
     for track in tracks {
         album_to_songs
             .entry((&track.artist, &track.album))
             .or_insert(Vec::new())
             .push(track.clone());
+
+        let time = album_to_mru_track
+            .entry((&track.artist, &track.album))
+            .or_insert(track.last_played);
+
+        *time = std::cmp::min(*time, track.last_played); // updates value IN the HashMap
     }
 
     let mut albums = Vec::new();
     for ((artist, album), mut songs) in album_to_songs {
         songs.sort();
         albums.push(Album {
+            last_played: *album_to_mru_track.get(&(artist, album)).unwrap(),
             artist: artist.to_string(),
             album: album.to_string(),
             date: songs.first().map_or("Unknown Date".to_string(), |d| d.date.clone()),
@@ -103,15 +120,14 @@ pub fn filter_tracks(tracks: &[TrackDetails], query: &str) -> Vec<TrackDetails> 
 // idk if cylces are possible to create in file systems
 // maybe with symlinks, but i don't wan't to deal
 // with that right now
-
-pub fn get_music_files(path: &Path, songs: &mut Vec<TrackDetails>) -> io::Result<()> {
+pub fn get_music_files(path: &Path, songs: &mut Vec<TrackDetails>, db: &Option<Database>) -> io::Result<()> {
     let mut it: fs::ReadDir = fs::read_dir(path)?;
 
     while let Some(entry) = it.next() {
         let entry: DirEntry = entry?;
 
         if entry.metadata()?.is_dir() {
-            get_music_files(&entry.path(), songs)?;
+            get_music_files(&entry.path(), songs, db)?;
         } else {
             let path: PathBuf = entry.path();
             let file_type = path.extension().and_then(|e| e.to_str()).unwrap();
@@ -122,7 +138,7 @@ pub fn get_music_files(path: &Path, songs: &mut Vec<TrackDetails>) -> io::Result
             );
 
             if is_audio {
-                match get_audio_metadata(&path) {
+                match get_audio_metadata(&path, db) {
                     Ok(ans) => songs.push(ans),
                     _ => {}
                 }
@@ -133,7 +149,7 @@ pub fn get_music_files(path: &Path, songs: &mut Vec<TrackDetails>) -> io::Result
     Ok(())
 }
 
-fn get_audio_metadata(path: &Path) -> Result<TrackDetails, Box<dyn std::error::Error>> {
+fn get_audio_metadata(path: &Path, db: &Option<Database>) -> Result<TrackDetails, Box<dyn std::error::Error>> {
     let tagged_file: TaggedFile = read_from_path(path)?;
     let tag = tagged_file.primary_tag().unwrap();
     let title = tag.title().unwrap_or("Unknown Title".into()).to_string();
@@ -151,22 +167,62 @@ fn get_audio_metadata(path: &Path) -> Result<TrackDetails, Box<dyn std::error::E
         })
         .to_string();
     let track_no = tag.track().unwrap_or(0);
-
+    let song_path = path.to_string_lossy().to_string();
     let duration = tagged_file.properties().duration().as_secs();
+
+    let last_played = match db {
+        Some(database) => {
+            read_or_insert(database, &song_path).unwrap()
+        },
+        _ => 0,
+    };
+
     Ok(TrackDetails {
         artist,
         album,
         title,
         track_no,
         date,
-        song_path: path.to_string_lossy().to_string(),
+        song_path,
         duration,
+        last_played,
     })
 }
+
+
+#[derive(Deserialize, Debug)]
+pub struct Config {
+    pub music_path: String,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Config {
+            music_path: dirs::home_dir()
+                .expect("could not find home dir")
+                .join("Music")
+                .to_string_lossy()
+                .to_string(),
+        }
+    }
+}
+
+pub fn init() -> Config {
+    let config_path = dirs::home_dir()
+        .expect("Could not find home directory")
+        .join(".config/bragi/conf.toml");
+
+    std::fs::read_to_string(&config_path)
+        .ok()
+        .and_then(|s| toml::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
 
     fn track(artist: &str, album: &str, title: &str) -> TrackDetails {
         TrackDetails {
@@ -177,6 +233,7 @@ mod tests {
             date: "2020".to_string(),
             song_path: "/fake/path.mp3".to_string(),
             duration: 180,
+            last_played: 0,
         }
     }
 

@@ -1,11 +1,9 @@
 mod app;
 mod types;
 mod ui;
-mod init;
+mod config;
+mod db;
 
-use app::App;
-use std::io;
-
-fn main() -> io::Result<()> {
-    ratatui::run(|terminal| App::new().run(terminal))
+fn main() -> std::io::Result<()> {
+    ratatui::run(|terminal| app::App::new().run(terminal))
 }

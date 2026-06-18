@@ -2,6 +2,7 @@
 
 - Terminal-based, music browser and player.
 - Vim motions.
+- Very early in development.
 
 ### Keybinds
 
@@ -20,7 +21,5 @@
 
 
 ### TODO
-- Add statistics like `time_played` for artists, albums, songs
-- Add statistics to `~/.local/share/bragi-rs/history.json`
-- Add `config` file support.
-- Add `config` file to `~/.config/bargi-rs`.
+- Add statistics like `time_played`, `time_added` for artists, albums, songs
+- Add skip song functionality
