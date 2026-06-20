@@ -19,3 +19,9 @@ pub enum MusicStreamEvent {
     PlaybackEvent(PlaybackMode),
     TrackAutoAdvanced(TrackDetails),
 }
+
+pub enum Page {
+    AlbumsView,
+    SongsView,
+    SearchView
+}

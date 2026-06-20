@@ -2,7 +2,7 @@ use music::TrackDetails;
 use ratatui::prelude::Text;
 use ratatui::{
     buffer::Buffer,
-    layout::{Constraint, Layout, Rect, Margin},
+    layout::{Constraint, Layout, Rect},
     style::{Color, Style},
     symbols,
     widgets::{Block, LineGauge, List, ListState, Paragraph, StatefulWidget, Widget},
@@ -62,23 +62,13 @@ impl Widget for &App {
                         .highlight_symbol(">>");
                 }
                 Page::SongsView => {
-                    let songs: Vec<TrackDetails> = self.album_selected.as_ref().unwrap().songs.clone();
+                    let songs: Vec<TrackDetails> = self.album_selected.as_ref().unwrap().songs;
 
                     music_selection = List::new(&songs)
                         .block(Block::bordered().title_top(list_title))
                         .style(ratatui::style::Style::default().fg(Color::White))
                         .highlight_style(Style::new().italic())
                         .highlight_symbol(">>");
-                }
-                Page::SearchView => {
-                    let songs: Vec<TrackDetails> = self.playlist_selected.as_ref().unwrap().clone();
-
-                    music_selection = List::new(&songs)
-                        .block(Block::bordered().title_top(list_title))
-                        .style(ratatui::style::Style::default().fg(Color::White))
-                        .highlight_style(Style::new().italic())
-                        .highlight_symbol(">>");
-
                 }
             }
         }
@@ -87,22 +77,16 @@ impl Widget for &App {
         let playback_state = binding.lock().unwrap();
         if *playback_state == PlaybackMode::Playing || *playback_state == PlaybackMode::Paused {
             std::mem::drop(playback_state);
-            let centered_progress_area = progress_bar_area.inner(Margin {
-                horizontal: 4,
-                vertical: 0,
-            });
             let progress_bar = LineGauge::default()
-                .filled_style(Style::new().cyan().on_black().bold())
-                .unfilled_style(Style::new().dark_gray().on_black())
+                .filled_style(Style::new().white().on_black().bold())
                 .label("")
                 .filled_symbol(symbols::line::THICK_HORIZONTAL)
-                .unfilled_symbol(symbols::line::THICK_HORIZONTAL)
                 .ratio(
                     (self.get_time_elapsed().as_secs_f64()
                         / self.playing_song.as_ref().unwrap().duration as f64)
                         .min(1.0)
                 );
-            progress_bar.render(centered_progress_area, buf);
+            progress_bar.render(progress_bar_area, buf);
         }
 
         StatefulWidget::render(music_selection, selection_area, buf, &mut selection_state);

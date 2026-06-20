@@ -16,12 +16,12 @@ use crate::db::*;
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Album {
-    last_played: u64,
     artist: String,
     album: String,
     selected: bool,
     date: String,
-    pub songs: Vec<TrackDetails>
+    pub songs: Vec<TrackDetails>,
+    last_played: u64,
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -78,7 +78,7 @@ pub fn build_albums(tracks: &Vec<TrackDetails>) -> Vec<Album> {
             .entry((&track.artist, &track.album))
             .or_insert(track.last_played);
 
-        *time = std::cmp::min(*time, track.last_played); // updates value IN the HashMap
+        *time = std::cmp::max(*time, track.last_played);
     }
 
     let mut albums = Vec::new();
@@ -120,6 +120,7 @@ pub fn filter_tracks(tracks: &[TrackDetails], query: &str) -> Vec<TrackDetails> 
 // idk if cylces are possible to create in file systems
 // maybe with symlinks, but i don't wan't to deal
 // with that right now
+
 pub fn get_music_files(path: &Path, songs: &mut Vec<TrackDetails>, db: &Option<Database>) -> io::Result<()> {
     let mut it: fs::ReadDir = fs::read_dir(path)?;
 
@@ -170,11 +171,13 @@ fn get_audio_metadata(path: &Path, db: &Option<Database>) -> Result<TrackDetails
     let song_path = path.to_string_lossy().to_string();
     let duration = tagged_file.properties().duration().as_secs();
 
-    let last_played = match db {
-        Some(database) => {
-            read_or_insert(database, &song_path).unwrap()
+    let last_played = match read_or_insert(db, &song_path) {
+        Some(response) => {
+            response
         },
-        _ => 0,
+        _ => {
+            0
+        },
     };
 
     Ok(TrackDetails {

@@ -18,8 +18,3 @@
 - `Enter`:
   - if in search mode: Move into playlist with songs selected by search buffer.
   - if in normal mode: Open an album, or play a song.
-
-
-### TODO
-- Add statistics like `time_played`, `time_added` for artists, albums, songs
-- Add skip song functionality
