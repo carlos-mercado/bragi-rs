@@ -63,6 +63,9 @@ impl From<&TrackDetails> for Text<'static> {
     }
 }
 
+// for all tracks in a library, put all songs that belong in the same
+// album, in the same album, and collect those albums into one
+// vector and return
 pub fn build_albums(tracks: &Vec<TrackDetails>) -> Vec<Album> {
     // (artist album) => time when the MRU track was played
     let mut album_to_mru_track: HashMap<(&String, &String), u64> = HashMap::new();
@@ -121,6 +124,8 @@ pub fn filter_tracks(tracks: &[TrackDetails], query: &str) -> Vec<TrackDetails> 
 // maybe with symlinks, but i don't wan't to deal
 // with that right now
 
+// dfs through all directories in music library 
+// and extract all music files
 pub fn get_music_files(path: &Path, songs: &mut Vec<TrackDetails>, db: &Option<Database>) -> io::Result<()> {
     let mut it: fs::ReadDir = fs::read_dir(path)?;
 
@@ -150,6 +155,8 @@ pub fn get_music_files(path: &Path, songs: &mut Vec<TrackDetails>, db: &Option<D
     Ok(())
 }
 
+// given a music file get the metadata of the track.
+// artist, album title, release date,  ...
 fn get_audio_metadata(path: &Path, db: &Option<Database>) -> Result<TrackDetails, Box<dyn std::error::Error>> {
     let tagged_file: TaggedFile = read_from_path(path)?;
     let tag = tagged_file.primary_tag().unwrap();

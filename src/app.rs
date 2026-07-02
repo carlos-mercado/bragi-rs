@@ -17,33 +17,22 @@ use crate::config::config_init;
 use crate::types::{MusicStreamEvent, PlaybackMode, VimMode, Page};
 use crate::db::*;
 
-/*
-songs at first is a vector of all songs in the library.
-songs can be filted by the user by going into searchmode.
-
-when the user finishes the seach by pressing enter,
-songs filters according to the query.
-
-songs does not neccessarily reflect the "playlist". i.e. if you
-skip the current track it does not mean that songs[i + 1], will be played
-next that is defined by playlist_selected
-
-*/
+/**/
 pub struct App {
     pub exit: bool,
-    pub counter: usize,
-    pub unfiltered_songs: Vec<TrackDetails>,
-    pub songs: Vec<TrackDetails>,
+    pub cursor: usize,
+    pub unfiltered_songs: Vec<TrackDetails>, // this won't change throughout the program.
+    pub songs: Vec<TrackDetails>, // this will change during search mode. 
+    pub albums: Vec<Album>,
     pub playing_song: Option<TrackDetails>,
     pub playing_song_idx: Option<usize>,
-    pub albums: Vec<Album>,
     pub album_selected: Option<Album>,
     pub playlist_selected: Option<Vec<TrackDetails>>,
+
     pub play_start: Option<Instant>,
     pub elapsed_before_paused: Duration,
     pub sender: Sender<(MusicStreamEvent, usize)>,
     pub receiver: Option<Receiver<(MusicStreamEvent, usize)>>,
-    pub mode: VimMode,
     pub playback_mode: Arc<Mutex<PlaybackMode>>,
     pub audio_handle: rodio::MixerDeviceSink,
     pub search_buff: String,
@@ -51,6 +40,8 @@ pub struct App {
     pub key_pressed_time: Instant,
     pub playback_event_receiver: Option<Receiver<MusicStreamEvent>>,
     pub db: Option<Database>,
+
+    pub mode: VimMode,
     pub viewer: Page,
 }
 
@@ -72,7 +63,7 @@ impl App {
         let playback_mode = Arc::new(Mutex::new(PlaybackMode::NotPlaying));
 
         let mut app = App {
-            counter: 0,
+            cursor: 0,
             exit: false,
             songs: songs_vec,
             albums,
@@ -145,7 +136,7 @@ impl App {
                 KeyCode::Char('g') => {
                     let timeout = Duration::from_millis(300);
                     if self.last_key == 'g' && self.key_pressed_time.elapsed() < timeout {
-                        self.counter = 0;
+                        self.cursor = 0;
                         self.last_key = ' ';
                     } else {
                         self.last_key = 'g';
@@ -154,10 +145,10 @@ impl App {
                 }
                 KeyCode::Char('G') => {
                     if self.album_selected == None {
-                        self.counter = self.albums.len() - 1;
+                        self.cursor = self.albums.len() - 1;
                     }
                     else {
-                        self.counter = self.album_selected.as_ref().unwrap().songs.clone().len() - 1;
+                        self.cursor = self.album_selected.as_ref().unwrap().songs.clone().len() - 1;
                     }
                 }
                 KeyCode::Char('p') => {
@@ -193,13 +184,13 @@ impl App {
 
                     match self.viewer {
                         Page::AlbumsView => {
-                            self.album_selected = Some(self.albums[self.counter as usize].clone());
+                            self.album_selected = Some(self.albums[self.cursor].clone());
                             self.viewer = Page::SongsView;
-                            self.counter = 0;
+                            self.cursor = 0;
                         },
                         _ => {
                             // user chose a song
-                            self.playing_song_idx = Some(self.counter) ;
+                            self.playing_song_idx = Some(self.cursor) ;
                             let binding = Arc::clone(&self.playback_mode);
                             let mut state = binding.lock().unwrap();
                             self.playlist_selected = match &self.album_selected {
@@ -209,7 +200,7 @@ impl App {
 
                             self.playing_song = Some( self.playlist_selected.as_ref().unwrap()[self.playing_song_idx.unwrap()].clone() );
                             self.sender
-                                .send(( MusicStreamEvent::NewPlaylistEvent(self.playlist_selected.as_ref().unwrap().clone()), self.counter))
+                                .send(( MusicStreamEvent::NewPlaylistEvent(self.playlist_selected.as_ref().unwrap().clone()), self.cursor))
                                 .expect("Could not send through channel");
                             *state = PlaybackMode::Playing;
 
@@ -233,14 +224,14 @@ impl App {
                 KeyCode::Char(c) => {
                     self.search_buff.push(c);
                     self.songs = self.filter_songs();
-                    self.counter = 0;
+                    self.cursor = 0;
                 }
                 KeyCode::Backspace => {
                     if self.search_buff.is_empty() { return; }
 
                     self.search_buff.pop();
                     self.songs = self.filter_songs();
-                    self.counter = 0;
+                    self.cursor = 0;
                 }
                 KeyCode::Enter => {
                     self.search_buff.clear();
@@ -253,7 +244,7 @@ impl App {
                     self.viewer = Page::SearchView;
                 }
                 KeyCode::Esc => {
-                    self.counter = 0;
+                    self.cursor = 0;
                     self.search_buff.clear();
                     self.mode = VimMode::Normal;
                     self.songs = self.unfiltered_songs.clone();
@@ -275,19 +266,19 @@ impl App {
     fn increment_counter(&mut self) {
         match self.viewer {
             Page::AlbumsView => {
-                self.counter = std::cmp::min(self.albums.len() - 1, self.counter + 1);
+                self.cursor = std::cmp::min(self.albums.len() - 1, self.cursor + 1);
             },
             Page::SongsView => {
-                self.counter = std::cmp::min(self.album_selected.as_ref().unwrap().songs.len() - 1, self.counter + 1);
+                self.cursor = std::cmp::min(self.album_selected.as_ref().unwrap().songs.len() - 1, self.cursor + 1);
             },
             Page::SearchView => {
-                self.counter = std::cmp::min(self.playlist_selected.as_ref().unwrap().len() - 1, self.counter + 1);
+                self.cursor = std::cmp::min(self.playlist_selected.as_ref().unwrap().len() - 1, self.cursor + 1);
             },
         }
     }
 
     fn decrement_counter(&mut self) {
-        self.counter = std::cmp::max(0_i32, self.counter as i32 - 1) as usize;
+        self.cursor = std::cmp::max(0_i32, self.cursor as i32 - 1) as usize;
     }
 
     fn next_song(&mut self) {

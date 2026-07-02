@@ -2,7 +2,6 @@
 
 - Terminal-based, music browser and player.
 - Vim motions.
-- Very early in development.
 
 ### Keybinds
 
@@ -20,3 +19,7 @@
 - `Enter`:
   - if in search mode: Move into playlist with songs selected by search buffer.
   - if in normal mode: Open an album, or play a song.
+
+### Disclaimers
+- Very early in development.
+- No `ALAC` support.

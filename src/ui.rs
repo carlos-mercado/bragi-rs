@@ -22,7 +22,7 @@ impl Widget for &App {
             Layout::vertical([Constraint::Percentage(90), Constraint::Percentage(10)])
                 .areas(lower_area);
 
-        let mut selection_state = ListState::default().with_selected(Some(self.counter as usize));
+        let mut selection_state = ListState::default().with_selected(Some(self.cursor));
         let music_preview = Block::bordered().title_top("Now Playing");
 
         let binding = Arc::clone(&self.playback_mode);
