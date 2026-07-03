@@ -397,7 +397,8 @@ impl App {
                                 let mut state = playback_mode.lock().unwrap();
                                 *state = PlaybackMode::NotPlaying;
                             }
-                            // if there is we are not at the last song
+
+                            // if we are not at the last song
                             // in the playlist, play the next song.
                             else {
                                 std::mem::drop(player);
@@ -413,4 +414,3 @@ impl App {
         });
     }
 }
-// self.elapsed_before_paused + self.play_start.unwrap_or(Instant::now()).elapsed()
