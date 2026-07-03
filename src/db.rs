@@ -2,7 +2,7 @@ use std::{time::{ SystemTime, UNIX_EPOCH }};
 use redb::{Database, Error, ReadableDatabase, TableDefinition};
 use std::path::{PathBuf};
 
-// {path} => (last_played, duration_played, track_added)
+// path => (last_played, duration_played, track_added)
 const TABLE: TableDefinition<&str, ( u64, u64, u64 )> = TableDefinition::new("bragi.db");
 
 pub fn db_setup() -> Option<Database> {
@@ -55,7 +55,7 @@ pub fn read_or_insert(possible_db: &Option<Database>, query: &str) -> Option<( u
 }
 
 // TODO could also be async
-pub fn update_time_played(db: &Database, query: &str) -> Result<(), Error> {
+pub fn update_last_played(db: &Database, query: &str) -> Result<(), Error> {
     let read_tx = db.begin_read()?;
     let table = read_tx.open_table(TABLE)?;
     let old_entry = table.get(query).unwrap().expect("This entry should exist already. It does not.");
@@ -65,11 +65,31 @@ pub fn update_time_played(db: &Database, query: &str) -> Result<(), Error> {
     let write_tx = db.begin_write()?;
     {
         let mut new_entry = old_entry.value();
-        new_entry.1 = SystemTime::now()
+        new_entry.0 = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
 
+        let mut table = write_tx.open_table(TABLE)?;
+        table.insert(query, new_entry)?;
+    }
+    write_tx.commit()?;
+
+    Ok(())
+}
+
+// TODO could also be async
+pub fn update_duration_played(db: &Database, query: &str, duration: u64) -> Result<(), Error> {
+    let read_tx = db.begin_read()?;
+    let table = read_tx.open_table(TABLE)?;
+    let old_entry = table.get(query).unwrap().expect("This entry should exist already. It does not.");
+    drop(read_tx);
+
+
+    let write_tx = db.begin_write()?;
+    {
+        let mut new_entry = old_entry.value();
+        new_entry.1 += duration;
         let mut table = write_tx.open_table(TABLE)?;
         table.insert(query, new_entry)?;
     }

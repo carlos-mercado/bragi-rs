@@ -4,6 +4,7 @@ use music::{ TrackDetails };
 pub enum VimMode {
     Search,
     Normal,
+    Command
 }
 
 #[derive(PartialEq)]
@@ -24,4 +25,9 @@ pub enum Page {
     AlbumsView,
     SongsView,
     SearchView
+}
+
+pub enum DbUpdate {
+    LastPlayed(String),
+    DurationPlayed(String, u64),
 }

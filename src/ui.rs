@@ -39,6 +39,7 @@ impl Widget for &App {
         let list_title = match self.mode {
             VimMode::Normal => String::from("Playlist"),
             VimMode::Search => format!("Searching: {}", self.search_buff),
+            VimMode::Command => format!("cmd: {}", self.command_buff),
         };
 
         let music_selection;

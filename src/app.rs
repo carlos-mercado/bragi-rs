@@ -14,7 +14,7 @@ use ratatui::Frame;
 use music::{Album, TrackDetails, build_albums, filter_tracks, get_music_files };
 use redb::Database;
 use crate::config::config_init;
-use crate::types::{MusicStreamEvent, PlaybackMode, VimMode, Page};
+use crate::types::{MusicStreamEvent, PlaybackMode, VimMode, Page, DbUpdate};
 use crate::db::*;
 
 pub struct App {
@@ -35,6 +35,7 @@ pub struct App {
     pub playback_mode: Arc<Mutex<PlaybackMode>>,
     pub audio_handle: rodio::MixerDeviceSink,
     pub search_buff: String,
+    pub command_buff: String,
     pub last_key: char,
     pub key_pressed_time: Instant,
     pub playback_event_receiver: Option<Receiver<MusicStreamEvent>>,
@@ -84,6 +85,7 @@ impl App {
             db,
             playlist_selected: None,
             viewer: Page::AlbumsView,
+            command_buff: String::new(),
         };
 
         app.playback();
@@ -109,6 +111,15 @@ impl App {
                 self.elapsed_before_paused = Duration::from_secs(0);
                 self.playing_song = Some(i);
                 self.playing_song_idx = Some(self.playing_song_idx.unwrap() + 1);
+
+                // the previous song played to completion, add the duration of the 
+                // track to the track statistics
+                let prev_song = self.playlist_selected
+                    .as_ref()
+                    .unwrap()[&self.playing_song_idx.unwrap() - 1]
+                    .clone();
+
+                self.update_db(DbUpdate::DurationPlayed(prev_song.song_path, prev_song.duration));
             }
         }
 
@@ -132,6 +143,7 @@ impl App {
                 KeyCode::Char('h') => self.prev_song(),
                 KeyCode::Char('l') => self.next_song(),
                 KeyCode::Char('/') => self.mode = VimMode::Search,
+                KeyCode::Char(':') => self.mode = VimMode::Command,
                 KeyCode::Char('g') => {
                     let timeout = Duration::from_millis(300);
                     if self.last_key == 'g' && self.key_pressed_time.elapsed() < timeout {
@@ -189,6 +201,17 @@ impl App {
                         },
                         _ => {
                             // user chose a song
+
+                            if let Some(prev_song) = &self.playing_song {
+                                // add elapsed song time into db for the track
+                                // if a new song is selected
+                                let dur_played = self.get_time_elapsed().as_secs_f64() as u64;
+                                self.update_db(DbUpdate::DurationPlayed( 
+                                    prev_song.song_path.clone(), 
+                                    dur_played
+                                ));
+                            }
+
                             self.playing_song_idx = Some(self.cursor) ;
                             let binding = Arc::clone(&self.playback_mode);
                             let mut state = binding.lock().unwrap();
@@ -203,14 +226,7 @@ impl App {
                                 .expect("Could not send through channel");
                             *state = PlaybackMode::Playing;
 
-                            // update last_played time
-                            if let Some(database) = &self.db {
-                                let path = self.playing_song.as_ref().unwrap().song_path.as_str();
-                                if let Err(e) = update_time_played(database, path) {
-                                    eprintln!("Failed to update: {e}");
-                                }
-                            }
-
+                            self.update_db(DbUpdate::LastPlayed(self.playing_song.clone().unwrap().song_path));
                             self.play_start = Some(Instant::now());
                             self.elapsed_before_paused = Duration::from_secs(0);
                         }
@@ -218,7 +234,8 @@ impl App {
                 }
                 _ => {}
             }
-        } else {
+        } 
+        else if self.mode == VimMode::Search {
             match key_event.code {
                 KeyCode::Char(c) => {
                     self.search_buff.push(c);
@@ -252,6 +269,54 @@ impl App {
                 _ => {}
             }
         }
+        else {
+            match key_event.code {
+                KeyCode::Char(c) => {
+                    self.command_buff.push(c);
+                    self.cursor = 0;
+                }
+                KeyCode::Backspace => {
+                    if self.command_buff.is_empty() { return; }
+                    self.command_buff.pop();
+                    self.cursor = 0;
+                }
+                KeyCode::Enter => {
+                    self.parse_command();
+                    self.command_buff.clear();
+                    self.mode = VimMode::Normal;
+                    self.viewer = Page::AlbumsView;
+                }
+                KeyCode::Esc => {
+                    self.cursor = 0;
+                    self.command_buff.clear();
+                    self.mode = VimMode::Normal;
+                    self.viewer = Page::AlbumsView;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn parse_command(&mut self) {
+        let buff_clone = self.command_buff.clone();
+        let args : Vec<&str> = buff_clone.split(" ").collect();
+        if args.len() != 2 { return; }
+        self.run_command(args);
+    }
+
+    fn run_command(&mut self, args: Vec<&str>) {
+        match args[0] {
+            "sort" => {
+                let sort_by_this = args[1];
+                match sort_by_this {
+                    "last_played" => { self.albums.sort_by_key(|a| a.stats.0); },
+                    "duration_played" => { self.albums.sort_by_key(|a| a.stats.1); },
+                    "time_added" => { self.albums.sort_by_key(|a| a.stats.2); },
+                    _ => { self.albums.sort(); },
+                }
+            },
+            _ => {},
+        }
     }
 
     fn filter_songs(&self) -> Vec<TrackDetails> {
@@ -281,14 +346,10 @@ impl App {
     }
 
     fn next_song(&mut self) {
-        if self.playlist_selected == None {
-            return;
-        }
+        if self.playlist_selected == None { return; }
 
         let len = self.playlist_selected.as_ref().unwrap().len();
-        if self.playing_song_idx.unwrap() + 1 >= len {
-            return;
-        }
+        if self.playing_song_idx.unwrap() + 1 >= len { return; }
 
         self.playing_song_idx = Some(self.playing_song_idx.unwrap() + 1);
         let next_song : Option<TrackDetails> = self.playlist_selected
@@ -296,6 +357,7 @@ impl App {
                             .unwrap()
                             .get(self.playing_song_idx.unwrap())
                             .cloned();
+
         self.playing_song = next_song;
 
         self.sender
@@ -327,6 +389,23 @@ impl App {
 
     pub fn get_time_elapsed(&self) -> Duration {
         self.elapsed_before_paused + self.play_start.unwrap_or(Instant::now()).elapsed()
+    }
+
+    fn update_db(&self, update_type: DbUpdate) {
+        let Some(database) = &self.db else { return; };
+
+        match update_type {
+            DbUpdate::DurationPlayed( song_path, duration ) => {
+                if let Err(e) = update_duration_played(database, &song_path, duration) {
+                    panic!("Failed to update: {e}");
+                }
+            },
+            DbUpdate::LastPlayed( song_path ) => {
+                if let Err(e) = update_last_played(database, &song_path) {
+                    panic!("Failed to update: {e}");
+                }
+            }
+        }
     }
 
     fn playback(&mut self) {

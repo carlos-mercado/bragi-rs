@@ -17,7 +17,7 @@ pub struct Album {
     artist: String,
     album: String,
     selected: bool,
-    date: String,
+    pub date: String,
     pub songs: Vec<TrackDetails>,
     pub stats: ( u64, u64, u64 ),
 }
@@ -32,6 +32,7 @@ pub struct TrackDetails {
     pub song_path: String,
     pub duration: u64,
     pub stats: ( u64, u64, u64 ),
+    //         (last_played, duration_played, date_added)
 }
 
 impl From<&Album> for Text<'static> {
@@ -46,8 +47,8 @@ impl From<&Album> for Text<'static> {
 impl From<TrackDetails> for Text<'static> {
     fn from(track: TrackDetails) -> Self {
         Text::from(format!(
-            "{}\n{}\n{} [Track {}]",
-            track.artist, track.title, track.album, track.track_no,
+            "{}\n{}\n{} [Track {}] {}",
+            track.artist, track.title, track.album, track.track_no, track.stats.1
         ))
     }
 }
@@ -55,8 +56,8 @@ impl From<TrackDetails> for Text<'static> {
 impl From<&TrackDetails> for Text<'static> {
     fn from(track: &TrackDetails) -> Self {
         Text::from(format!(
-            "{} - {} ({}) [Track {}]",
-            track.artist, track.title, track.date, track.track_no,
+            "{} - {} ({}) [Track {}] {}",
+            track.artist, track.title, track.date, track.track_no, track.stats.1
         ))
     }
 }
@@ -143,7 +144,7 @@ pub fn get_music_files(path: &Path, songs: &mut Vec<TrackDetails>, db: &Option<D
 
             let is_audio = matches!(
                 file_type.to_lowercase().as_str(),
-                "mp3" | "flac" | "alac" | "wav" | "aac" | "ogg" | "m4a" | "aiff"
+                "mp3" | "flac" | "wav" | "aac" | "ogg" | "m4a" | "aiff"
             );
 
             if is_audio {
