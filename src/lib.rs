@@ -1,3 +1,4 @@
+use std::{time::{ SystemTime, UNIX_EPOCH }};
 use lofty::file::TaggedFile;
 use lofty::{prelude::*, read_from_path};
 use ratatui::prelude::{Text};
@@ -7,12 +8,9 @@ use std::fs::{self, DirEntry};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::collections::{HashMap};
-use dirs;
-use serde::{Deserialize};
 
 mod db;
 use crate::db::*;
-
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Album {
@@ -21,7 +19,7 @@ pub struct Album {
     selected: bool,
     date: String,
     pub songs: Vec<TrackDetails>,
-    last_played: u64,
+    pub stats: ( u64, u64, u64 ),
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -33,7 +31,7 @@ pub struct TrackDetails {
     pub date: String,
     pub song_path: String,
     pub duration: u64,
-    pub last_played: u64,
+    pub stats: ( u64, u64, u64 ),
 }
 
 impl From<&Album> for Text<'static> {
@@ -67,32 +65,37 @@ impl From<&TrackDetails> for Text<'static> {
 // album, in the same album, and collect those albums into one
 // vector and return
 pub fn build_albums(tracks: &Vec<TrackDetails>) -> Vec<Album> {
-    // (artist album) => time when the MRU track was played
-    let mut album_to_mru_track: HashMap<(&String, &String), u64> = HashMap::new();
+    // (artist, album) => album_stats
+    let mut album_to_stats: HashMap<(&String, &String), ( u64, u64, u64 )> = HashMap::new();
+
     // (artist, album) => album_songs
     let mut album_to_songs: HashMap<(&String, &String), Vec<TrackDetails>> = HashMap::new();
+
     for track in tracks {
         album_to_songs
             .entry((&track.artist, &track.album))
             .or_insert(Vec::new())
             .push(track.clone());
 
-        let time = album_to_mru_track
+        let album_stats = album_to_stats
             .entry((&track.artist, &track.album))
-            .or_insert(track.last_played);
+            .or_insert((0, 0, 0));
 
-        *time = std::cmp::max(*time, track.last_played);
+        let last_played = std::cmp::max(album_stats.0, track.stats.0);
+        let duration_played = album_stats.1 + track.stats.1;
+        let date_added = std::cmp::min(album_stats.2, track.stats.2);
+        *album_stats = (last_played, duration_played, date_added);
     }
 
     let mut albums = Vec::new();
     for ((artist, album), mut songs) in album_to_songs {
         songs.sort();
         albums.push(Album {
-            last_played: *album_to_mru_track.get(&(artist, album)).unwrap(),
             artist: artist.to_string(),
             album: album.to_string(),
             date: songs.first().map_or("Unknown Date".to_string(), |d| d.date.clone()),
             selected: false,
+            stats: album_to_stats[&(artist, album)],
             songs,
         });
     }
@@ -101,9 +104,9 @@ pub fn build_albums(tracks: &Vec<TrackDetails>) -> Vec<Album> {
     albums
 }
 
-/// Filter a list of tracks by a query string.
-/// Matches case-insensitively against artist, album, and title.
-/// Returns a new Vec containing only the matching tracks.
+// Filter a list of tracks by a query string.
+// Matches case-insensitively against artist, album, and title.
+// Returns a new Vec containing only the matching tracks.
 pub fn filter_tracks(tracks: &[TrackDetails], query: &str) -> Vec<TrackDetails> {
     let q = query.to_lowercase();
     tracks
@@ -178,12 +181,17 @@ fn get_audio_metadata(path: &Path, db: &Option<Database>) -> Result<TrackDetails
     let song_path = path.to_string_lossy().to_string();
     let duration = tagged_file.properties().duration().as_secs();
 
-    let last_played = match read_or_insert(db, &song_path) {
-        Some(response) => {
-            response
+    let time_now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let song_stats = match read_or_insert(db, &song_path) {
+        Some(stats) => {
+            stats
         },
         _ => {
-            0
+            (0, 0, time_now)
         },
     };
 
@@ -195,39 +203,9 @@ fn get_audio_metadata(path: &Path, db: &Option<Database>) -> Result<TrackDetails
         date,
         song_path,
         duration,
-        last_played,
+        stats: song_stats,
     })
 }
-
-
-#[derive(Deserialize, Debug)]
-pub struct Config {
-    pub music_path: String,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Config {
-            music_path: dirs::home_dir()
-                .expect("could not find home dir")
-                .join("Music")
-                .to_string_lossy()
-                .to_string(),
-        }
-    }
-}
-
-pub fn init() -> Config {
-    let config_path = dirs::home_dir()
-        .expect("Could not find home directory")
-        .join(".config/bragi/conf.toml");
-
-    std::fs::read_to_string(&config_path)
-        .ok()
-        .and_then(|s| toml::from_str(&s).ok())
-        .unwrap_or_default()
-}
-
 
 #[cfg(test)]
 mod tests {
@@ -243,7 +221,7 @@ mod tests {
             date: "2020".to_string(),
             song_path: "/fake/path.mp3".to_string(),
             duration: 180,
-            last_played: 0,
+            stats: (0,0,0),
         }
     }
 

@@ -1,6 +1,7 @@
 use dirs;
 use serde::{Deserialize};
 
+
 #[derive(Deserialize, Debug)]
 pub struct Config {
     pub music_path: String,

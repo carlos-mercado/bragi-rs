@@ -8,7 +8,6 @@ use ratatui::{
     widgets::{Block, LineGauge, List, ListState, Paragraph, StatefulWidget, Widget},
 };
 use std::sync::Arc;
-
 use crate::app::App;
 use crate::types::{PlaybackMode, VimMode};
 use crate::types::{Page};
@@ -48,7 +47,7 @@ impl Widget for &App {
             music_selection = List::new(&self.songs)
                 .block(Block::bordered().title_top(list_title))
                 .style(ratatui::style::Style::default().fg(Color::White))
-                .highlight_style(Style::new().italic())
+                .highlight_style(Style::new().italic().bold())
                 .highlight_symbol(">>");
 
         }
@@ -58,7 +57,7 @@ impl Widget for &App {
                     music_selection = List::new(&self.albums)
                         .block(Block::bordered().title_top(list_title))
                         .style(ratatui::style::Style::default().fg(Color::White))
-                        .highlight_style(Style::new().italic())
+                        .highlight_style(Style::new().italic().bold())
                         .highlight_symbol(">>");
                 }
                 Page::SongsView => {
@@ -67,7 +66,7 @@ impl Widget for &App {
                     music_selection = List::new(&songs)
                         .block(Block::bordered().title_top(list_title))
                         .style(ratatui::style::Style::default().fg(Color::White))
-                        .highlight_style(Style::new().italic())
+                        .highlight_style(Style::new().italic().bold())
                         .highlight_symbol(">>");
                 }
                 Page::SearchView => {
@@ -76,7 +75,7 @@ impl Widget for &App {
                     music_selection = List::new(&songs)
                         .block(Block::bordered().title_top(list_title))
                         .style(ratatui::style::Style::default().fg(Color::White))
-                        .highlight_style(Style::new().italic())
+                        .highlight_style(Style::new().italic().bold())
                         .highlight_symbol(">>");
 
                 }

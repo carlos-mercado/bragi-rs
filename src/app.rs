@@ -17,7 +17,6 @@ use crate::config::config_init;
 use crate::types::{MusicStreamEvent, PlaybackMode, VimMode, Page};
 use crate::db::*;
 
-/**/
 pub struct App {
     pub exit: bool,
     pub cursor: usize,
@@ -207,7 +206,7 @@ impl App {
                             // update last_played time
                             if let Some(database) = &self.db {
                                 let path = self.playing_song.as_ref().unwrap().song_path.as_str();
-                                if let Err(e) = update(database, path) {
+                                if let Err(e) = update_time_played(database, path) {
                                     eprintln!("Failed to update: {e}");
                                 }
                             }
