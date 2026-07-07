@@ -1,16 +1,16 @@
+use crate::app::App;
+use crate::types::Page;
+use crate::types::{PlaybackMode, VimMode};
 use music::TrackDetails;
 use ratatui::prelude::Text;
 use ratatui::{
     buffer::Buffer,
-    layout::{Constraint, Layout, Rect, Margin},
+    layout::{Constraint, Layout, Margin, Rect},
     style::{Color, Style},
     symbols,
     widgets::{Block, LineGauge, List, ListState, Paragraph, StatefulWidget, Widget},
 };
 use std::sync::Arc;
-use crate::app::App;
-use crate::types::{PlaybackMode, VimMode};
-use crate::types::{Page};
 
 impl Widget for &App {
     fn render(self, area: Rect, buf: &mut Buffer) {
@@ -38,8 +38,9 @@ impl Widget for &App {
 
         let list_title = match self.mode {
             VimMode::Normal => String::from("Playlist"),
-            VimMode::Search => format!("Searching: {}", self.search_buff),
-            VimMode::Command => format!("cmd: {}", self.command_buff),
+            VimMode::Search => format!("Searching: {}", self.user_buff),
+            VimMode::Command => format!("cmd: {}", self.user_buff),
+            VimMode::Marking => format!("Marking: {}", self.user_buff),
         };
 
         let music_selection;
@@ -50,9 +51,7 @@ impl Widget for &App {
                 .style(ratatui::style::Style::default().fg(Color::White))
                 .highlight_style(Style::new().italic().bold())
                 .highlight_symbol(">>");
-
-        }
-        else {
+        } else {
             match self.viewer {
                 Page::AlbumsView => {
                     music_selection = List::new(&self.albums)
@@ -62,7 +61,8 @@ impl Widget for &App {
                         .highlight_symbol(">>");
                 }
                 Page::SongsView => {
-                    let songs: Vec<TrackDetails> = self.album_selected.as_ref().unwrap().songs.clone();
+                    let songs: Vec<TrackDetails> =
+                        self.album_selected.as_ref().unwrap().songs.clone();
 
                     music_selection = List::new(&songs)
                         .block(Block::bordered().title_top(list_title))
@@ -78,7 +78,6 @@ impl Widget for &App {
                         .style(ratatui::style::Style::default().fg(Color::White))
                         .highlight_style(Style::new().italic().bold())
                         .highlight_symbol(">>");
-
                 }
             }
         }
@@ -100,7 +99,7 @@ impl Widget for &App {
                 .ratio(
                     (self.get_time_elapsed().as_secs_f64()
                         / self.playing_song.as_ref().unwrap().duration as f64)
-                        .min(1.0)
+                        .min(1.0),
                 );
             progress_bar.render(centered_progress_area, buf);
         }

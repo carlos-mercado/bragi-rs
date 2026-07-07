@@ -1,10 +1,11 @@
-use music::{ TrackDetails };
+use music::TrackDetails;
 
 #[derive(PartialEq)]
 pub enum VimMode {
     Search,
     Normal,
-    Command
+    Command,
+    Marking,
 }
 
 #[derive(PartialEq)]
@@ -21,10 +22,11 @@ pub enum MusicStreamEvent {
     TrackAutoAdvanced(TrackDetails),
 }
 
+#[derive(PartialEq)]
 pub enum Page {
     AlbumsView,
     SongsView,
-    SearchView
+    SearchView,
 }
 
 pub enum DbUpdate {

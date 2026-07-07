@@ -1,15 +1,15 @@
-use std::{time::{ SystemTime, UNIX_EPOCH }};
 use lofty::file::TaggedFile;
 use lofty::{prelude::*, read_from_path};
-use ratatui::prelude::{Text};
+use ratatui::prelude::Text;
 use redb::Database;
 use std::cmp::Ord;
+use std::collections::HashMap;
 use std::fs::{self, DirEntry};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::collections::{HashMap};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-mod db;
+pub mod db;
 use crate::db::*;
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -19,7 +19,7 @@ pub struct Album {
     selected: bool,
     pub date: String,
     pub songs: Vec<TrackDetails>,
-    pub stats: ( u64, u64, u64 ),
+    pub stats: (u64, u64, u64),
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -31,8 +31,9 @@ pub struct TrackDetails {
     pub date: String,
     pub song_path: String,
     pub duration: u64,
-    pub stats: ( u64, u64, u64 ),
     //         (last_played, duration_played, date_added)
+    pub stats: (u64, u64, u64),
+    pub tags: Vec<String>,
 }
 
 impl From<&Album> for Text<'static> {
@@ -47,8 +48,8 @@ impl From<&Album> for Text<'static> {
 impl From<TrackDetails> for Text<'static> {
     fn from(track: TrackDetails) -> Self {
         Text::from(format!(
-            "{}\n{}\n{} [Track {}] {}",
-            track.artist, track.title, track.album, track.track_no, track.stats.1
+            "{}\n{}\n{} [Track {}] {:?}",
+            track.artist, track.title, track.album, track.track_no, track.tags
         ))
     }
 }
@@ -56,8 +57,8 @@ impl From<TrackDetails> for Text<'static> {
 impl From<&TrackDetails> for Text<'static> {
     fn from(track: &TrackDetails) -> Self {
         Text::from(format!(
-            "{} - {} ({}) [Track {}] {}",
-            track.artist, track.title, track.date, track.track_no, track.stats.1
+            "{} - {} ({}) [Track {}] {:?}",
+            track.artist, track.title, track.date, track.track_no, track.tags
         ))
     }
 }
@@ -67,7 +68,7 @@ impl From<&TrackDetails> for Text<'static> {
 // vector and return
 pub fn build_albums(tracks: &Vec<TrackDetails>) -> Vec<Album> {
     // (artist, album) => album_stats
-    let mut album_to_stats: HashMap<(&String, &String), ( u64, u64, u64 )> = HashMap::new();
+    let mut album_to_stats: HashMap<(&String, &String), (u64, u64, u64)> = HashMap::new();
 
     // (artist, album) => album_songs
     let mut album_to_songs: HashMap<(&String, &String), Vec<TrackDetails>> = HashMap::new();
@@ -94,7 +95,9 @@ pub fn build_albums(tracks: &Vec<TrackDetails>) -> Vec<Album> {
         albums.push(Album {
             artist: artist.to_string(),
             album: album.to_string(),
-            date: songs.first().map_or("Unknown Date".to_string(), |d| d.date.clone()),
+            date: songs
+                .first()
+                .map_or("Unknown Date".to_string(), |d| d.date.clone()),
             selected: false,
             stats: album_to_stats[&(artist, album)],
             songs,
@@ -117,10 +120,10 @@ pub fn filter_tracks(tracks: &[TrackDetails], query: &str) -> Vec<TrackDetails> 
             t.artist.to_lowercase().contains(&q)
                 || t.album.to_lowercase().contains(&q)
                 || t.title.to_lowercase().contains(&q)
+                || t.tags.contains(&q)
         })
         .collect()
 }
-
 
 // TODO
 // this is recusive dfs with no cycle checks
@@ -128,9 +131,13 @@ pub fn filter_tracks(tracks: &[TrackDetails], query: &str) -> Vec<TrackDetails> 
 // maybe with symlinks, but i don't wan't to deal
 // with that right now
 
-// dfs through all directories in music library 
+// dfs through all directories in music library
 // and extract all music files
-pub fn get_music_files(path: &Path, songs: &mut Vec<TrackDetails>, db: &Option<Database>) -> io::Result<()> {
+pub fn get_music_files(
+    path: &Path,
+    songs: &mut Vec<TrackDetails>,
+    db: Option<&Database>,
+) -> io::Result<()> {
     let mut it: fs::ReadDir = fs::read_dir(path)?;
 
     while let Some(entry) = it.next() {
@@ -161,7 +168,10 @@ pub fn get_music_files(path: &Path, songs: &mut Vec<TrackDetails>, db: &Option<D
 
 // given a music file get the metadata of the track.
 // artist, album title, release date,  ...
-fn get_audio_metadata(path: &Path, db: &Option<Database>) -> Result<TrackDetails, Box<dyn std::error::Error>> {
+fn get_audio_metadata(
+    path: &Path,
+    db: Option<&Database>,
+) -> Result<TrackDetails, Box<dyn std::error::Error>> {
     let tagged_file: TaggedFile = read_from_path(path)?;
     let tag = tagged_file.primary_tag().unwrap();
     let title = tag.title().unwrap_or("Unknown Title".into()).to_string();
@@ -188,12 +198,13 @@ fn get_audio_metadata(path: &Path, db: &Option<Database>) -> Result<TrackDetails
         .as_secs();
 
     let song_stats = match read_or_insert(db, &song_path) {
-        Some(stats) => {
-            stats
-        },
-        _ => {
-            (0, 0, time_now)
-        },
+        Some(stats) => stats,
+        _ => (0, 0, time_now),
+    };
+
+    let tags = match get_playlist_labels(db, &song_path) {
+        Some(labels) => labels,
+        _ => Vec::new(),
     };
 
     Ok(TrackDetails {
@@ -205,13 +216,13 @@ fn get_audio_metadata(path: &Path, db: &Option<Database>) -> Result<TrackDetails
         song_path,
         duration,
         stats: song_stats,
+        tags,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     fn track(artist: &str, album: &str, title: &str) -> TrackDetails {
         TrackDetails {
@@ -222,7 +233,8 @@ mod tests {
             date: "2020".to_string(),
             song_path: "/fake/path.mp3".to_string(),
             duration: 180,
-            stats: (0,0,0),
+            stats: (0, 0, 0),
+            tags: Vec::new(),
         }
     }
 

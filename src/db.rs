@@ -1,9 +1,10 @@
-use std::{time::{ SystemTime, UNIX_EPOCH }};
-use redb::{Database, Error, ReadableDatabase, TableDefinition};
-use std::path::{PathBuf};
+use redb::{Database, Error, MultimapTableDefinition, ReadableDatabase, TableDefinition};
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 // path => (last_played, duration_played, track_added)
-const TABLE: TableDefinition<&str, ( u64, u64, u64 )> = TableDefinition::new("bragi.db");
+const TRACK_DETAILS: TableDefinition<&str, (u64, u64, u64)> = TableDefinition::new("tracks.db");
+const PLAYLISTS: MultimapTableDefinition<&str, &str> = MultimapTableDefinition::new("playlists.db");
 
 pub fn db_setup() -> Option<Database> {
     let db_path: PathBuf = dirs::home_dir()
@@ -14,22 +15,24 @@ pub fn db_setup() -> Option<Database> {
 
     // Create table if it doesn't exist
     let write_tx = db.begin_write().ok()?;
-    write_tx.open_table(TABLE).ok()?;
+    write_tx.open_table(TRACK_DETAILS).ok()?;
+    write_tx.open_multimap_table(PLAYLISTS).ok()?;
     write_tx.commit().ok()?;
 
     Some(db)
 }
 
-
 // TODO could be async
 // if an song_path already exsits in the table read, adn return
 // otherwise create a new entry with default values,
-pub fn read_or_insert(possible_db: &Option<Database>, query: &str) -> Option<( u64, u64, u64 )> {
-    let Some(db) = possible_db else { return None; };
+pub fn read_or_insert(possible_db: Option<&Database>, query: &str) -> Option<(u64, u64, u64)> {
+    let Some(db) = possible_db else {
+        return None;
+    };
 
     {
         let read_tx = db.begin_read().ok()?;
-        let table = read_tx.open_table(TABLE).ok()?;
+        let table = read_tx.open_table(TRACK_DETAILS).ok()?;
         if let Some(tup) = table.get(query).ok()? {
             return Some(tup.value());
         }
@@ -42,11 +45,11 @@ pub fn read_or_insert(possible_db: &Option<Database>, query: &str) -> Option<( u
         .as_secs();
 
     // {path} => (last_played, duration_played, track_added)
-    let default: ( u64, u64, u64 ) = (now, 0, now);
+    let default: (u64, u64, u64) = (now, 0, now);
 
     let write_tx = db.begin_write().ok()?;
     {
-        let mut table = write_tx.open_table(TABLE).ok()?;
+        let mut table = write_tx.open_table(TRACK_DETAILS).ok()?;
         table.insert(query, default).ok()?;
     }
     write_tx.commit().ok()?;
@@ -57,10 +60,12 @@ pub fn read_or_insert(possible_db: &Option<Database>, query: &str) -> Option<( u
 // TODO could also be async
 pub fn update_last_played(db: &Database, query: &str) -> Result<(), Error> {
     let read_tx = db.begin_read()?;
-    let table = read_tx.open_table(TABLE)?;
-    let old_entry = table.get(query).unwrap().expect("This entry should exist already. It does not.");
+    let table = read_tx.open_table(TRACK_DETAILS)?;
+    let old_entry = table
+        .get(query)
+        .unwrap()
+        .expect("This entry should exist already. It does not.");
     drop(read_tx);
-
 
     let write_tx = db.begin_write()?;
     {
@@ -70,7 +75,7 @@ pub fn update_last_played(db: &Database, query: &str) -> Result<(), Error> {
             .unwrap()
             .as_secs();
 
-        let mut table = write_tx.open_table(TABLE)?;
+        let mut table = write_tx.open_table(TRACK_DETAILS)?;
         table.insert(query, new_entry)?;
     }
     write_tx.commit()?;
@@ -81,19 +86,108 @@ pub fn update_last_played(db: &Database, query: &str) -> Result<(), Error> {
 // TODO could also be async
 pub fn update_duration_played(db: &Database, query: &str, duration: u64) -> Result<(), Error> {
     let read_tx = db.begin_read()?;
-    let table = read_tx.open_table(TABLE)?;
-    let old_entry = table.get(query).unwrap().expect("This entry should exist already. It does not.");
+    let table = read_tx.open_table(TRACK_DETAILS)?;
+    let old_entry = table
+        .get(query)
+        .unwrap()
+        .expect("This entry should exist already. It does not.");
     drop(read_tx);
-
 
     let write_tx = db.begin_write()?;
     {
         let mut new_entry = old_entry.value();
         new_entry.1 += duration;
-        let mut table = write_tx.open_table(TABLE)?;
+        let mut table = write_tx.open_table(TRACK_DETAILS)?;
         table.insert(query, new_entry)?;
     }
     write_tx.commit()?;
 
     Ok(())
+}
+
+pub fn add_playlist_labels(db: &Database, query_path: &str, label: &str) -> Result<(), Error> {
+    let write_tx = db.begin_write().expect("couldn't begin_write");
+    {
+        let mut table = write_tx.open_multimap_table(PLAYLISTS)?;
+        table.insert(query_path, label)?;
+    }
+    write_tx.commit().expect("couldn't commit");
+
+    Ok(())
+}
+
+pub fn get_playlist_labels(possible_db: Option<&Database>, query_path: &str) -> Option<Vec<String>> {
+    let Some(db) = possible_db else {
+        return None;
+    };
+
+    let read_txn = db.begin_read().ok()?;
+    let table = read_txn.open_multimap_table(PLAYLISTS).ok()?;
+    let mut values = table.get(query_path).ok()?;
+    let mut labels_vec = Vec::new();
+    while let Some(v) = values.next() {
+        labels_vec.push(v.ok()?.value().to_string());
+    }
+
+    Some(labels_vec)
+}
+
+pub fn remove_playlist_labels(db: &Database, query_path: &str, label: &str) -> Result<(), Error> {
+    let write_tx = db.begin_write()?;
+    {
+        let mut table = write_tx.open_multimap_table(PLAYLISTS)?;
+        table.remove(query_path, label)?;
+    }
+    write_tx.commit()?;
+    Ok(())
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use redb::backends::InMemoryBackend;
+
+    fn setup_test_db() -> Database {
+        let db = Database::builder()
+            .create_with_backend(InMemoryBackend::new())
+            .unwrap();
+
+        let write_tx = db.begin_write().unwrap();
+        write_tx.open_table(TRACK_DETAILS).unwrap();
+        write_tx.open_multimap_table(PLAYLISTS).unwrap();
+        write_tx.commit().unwrap();
+
+        db
+    }
+
+    fn labels() -> Vec<String> {
+        vec![
+            "Post-Rock".to_string(),
+            "Prog".to_string(),
+            "gym".to_string(),
+            "spotify-wrapped_2025".to_string(),
+        ]
+    }
+
+    #[test]
+    fn test_labels() {
+        let db = setup_test_db();
+        let test_song = "/this/is/a/fakepath.mp3";
+        let labels = labels();
+
+        for (i, label) in labels.iter().enumerate() {
+            add_playlist_labels(&db, test_song, &label).unwrap();
+            let returned_labels = get_playlist_labels(Some(&db), test_song).unwrap();
+            assert_eq!(returned_labels, labels[..i + 1]);
+        }
+    }
+
+    #[test]
+    fn non_labeled_song_returns_empty() {
+        let db = setup_test_db();
+        let query_path = "/this/is/a/fakepath.mp3";
+        let tags = get_playlist_labels(Some(&db), query_path).unwrap();
+        assert!(tags.is_empty());
+    }
 }
