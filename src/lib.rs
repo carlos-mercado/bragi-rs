@@ -15,7 +15,7 @@ use crate::db::*;
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Album {
     artist: String,
-    album: String,
+    pub album: String,
     selected: bool,
     pub date: String,
     pub songs: Vec<TrackDetails>,

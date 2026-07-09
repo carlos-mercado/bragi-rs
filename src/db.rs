@@ -142,6 +142,15 @@ pub fn remove_playlist_labels(db: &Database, query_path: &str, label: &str) -> R
     Ok(())
 }
 
+pub fn wipe_playlist_labels(db: &Database, query_path: &str) -> Result<(), Error> {
+    let write_tx = db.begin_write()?;
+    {
+        let mut table = write_tx.open_multimap_table(PLAYLISTS)?;
+        table.remove_all(query_path)?;
+    }
+    write_tx.commit()?;
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests {
@@ -181,6 +190,20 @@ mod tests {
             let returned_labels = get_playlist_labels(Some(&db), test_song).unwrap();
             assert_eq!(returned_labels, labels[..i + 1]);
         }
+    }
+
+    #[test]
+    fn test_db_wipe() {
+        let db = setup_test_db();
+        let test_song = "/this/is/a/fakepath.mp3";
+        let labels = labels();
+
+        for label in labels {
+            add_playlist_labels(&db, test_song, &label).unwrap();
+        }
+        wipe_playlist_labels(&db, test_song).unwrap();
+
+        assert!(get_playlist_labels(Some( &db ), test_song).unwrap().is_empty());
     }
 
     #[test]

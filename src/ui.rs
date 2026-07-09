@@ -46,7 +46,7 @@ impl Widget for &App {
         let music_selection;
 
         if self.mode == VimMode::Search {
-            music_selection = List::new(&self.songs)
+            music_selection = List::new(&self.page_songs)
                 .block(Block::bordered().title_top(list_title))
                 .style(ratatui::style::Style::default().fg(Color::White))
                 .highlight_style(Style::new().italic().bold())
@@ -71,7 +71,7 @@ impl Widget for &App {
                         .highlight_symbol(">>");
                 }
                 Page::SearchView => {
-                    let songs: Vec<TrackDetails> = self.playlist_selected.as_ref().unwrap().clone();
+                    let songs: Vec<TrackDetails> = self.page_songs.clone();
 
                     music_selection = List::new(&songs)
                         .block(Block::bordered().title_top(list_title))
