@@ -13,12 +13,14 @@
 - `p`: pause / play the song.
 - `h`: previous song.
 - `l`: next song.
+- `m`: Tag a song.
+
 - `Esc`:
   - if in search mode: break out of search mode, return to playlist.
-  - if in normal mode: move back to base playlist.
+  - if in normal mode: move back to album selection.
 - `Enter`:
-  - if in search mode: Move into playlist with songs selected by search buffer.
-  - if in normal mode: Open an album, or play a song.
+  - if in search mode: move into playlist with songs selected by search buffer.
+  - if in normal mode: open an album, or play a song.
 
 ### Disclaimers
 - Very early in development.
