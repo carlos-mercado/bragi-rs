@@ -14,7 +14,7 @@ use crate::db::*;
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Album {
-    artist: String,
+    pub artist: String,
     pub album: String,
     selected: bool,
     pub date: String,
@@ -40,7 +40,7 @@ impl From<&Album> for Text<'static> {
     fn from(album: &Album) -> Self {
         Text::from(format!(
             "{} - {} [{}]",
-            album.artist, album.album, album.date
+            album.artist, album.album, album.date,
         ))
     }
 }
@@ -57,8 +57,15 @@ impl From<TrackDetails> for Text<'static> {
 impl From<&TrackDetails> for Text<'static> {
     fn from(track: &TrackDetails) -> Self {
         Text::from(format!(
-            "{} - {} ({}) [Track {}] {:?}",
-            track.artist, track.title, track.date, track.track_no, track.tags
+            "{} - {} ({}) [Track {}] {:?} (last_played: {}, duration_played: {}, date_added: {})",
+            track.artist,
+            track.title,
+            track.date,
+            track.track_no,
+            track.tags,
+            track.stats.0,
+            track.stats.1,
+            track.stats.2
         ))
     }
 }
@@ -76,7 +83,7 @@ pub fn build_albums(tracks: &Vec<TrackDetails>) -> Vec<Album> {
     for track in tracks {
         album_to_songs
             .entry((&track.artist, &track.album))
-            .or_insert(Vec::new())
+            .or_default()
             .push(track.clone());
 
         let album_stats = album_to_stats
@@ -85,7 +92,7 @@ pub fn build_albums(tracks: &Vec<TrackDetails>) -> Vec<Album> {
 
         let last_played = std::cmp::max(album_stats.0, track.stats.0);
         let duration_played = album_stats.1 + track.stats.1;
-        let date_added = std::cmp::min(album_stats.2, track.stats.2);
+        let date_added = std::cmp::max(album_stats.2, track.stats.2);
         *album_stats = (last_played, duration_played, date_added);
     }
 
@@ -115,13 +122,13 @@ pub fn filter_tracks(tracks: &[TrackDetails], query: &str) -> Vec<TrackDetails> 
     let q = query.to_lowercase();
     tracks
         .iter()
-        .cloned()
         .filter(|t| {
             t.artist.to_lowercase().contains(&q)
                 || t.album.to_lowercase().contains(&q)
                 || t.title.to_lowercase().contains(&q)
                 || t.tags.contains(&q)
         })
+        .cloned()
         .collect()
 }
 
@@ -138,9 +145,9 @@ pub fn get_music_files(
     songs: &mut Vec<TrackDetails>,
     db: Option<&Database>,
 ) -> io::Result<()> {
-    let mut it: fs::ReadDir = fs::read_dir(path)?;
+    let it: fs::ReadDir = fs::read_dir(path)?;
 
-    while let Some(entry) = it.next() {
+    for entry in it {
         let entry: DirEntry = entry?;
 
         if entry.metadata()?.is_dir() {
@@ -154,11 +161,8 @@ pub fn get_music_files(
                 "mp3" | "flac" | "wav" | "aac" | "ogg" | "m4a" | "aiff"
             );
 
-            if is_audio {
-                match get_audio_metadata(&path, db) {
-                    Ok(ans) => songs.push(ans),
-                    _ => {}
-                }
+            if is_audio && let Ok(ans) = get_audio_metadata(&path, db) {
+                songs.push(ans);
             }
         }
     }
@@ -202,10 +206,7 @@ fn get_audio_metadata(
         _ => (0, 0, time_now),
     };
 
-    let tags = match get_playlist_labels(db, &song_path) {
-        Some(labels) => labels,
-        _ => Vec::new(),
-    };
+    let tags = get_playlist_labels(db, &song_path).unwrap_or_default();
 
     Ok(TrackDetails {
         artist,
@@ -322,7 +323,7 @@ mod tests {
     // 9. Ord: tracks sort by artist → album → track_no → title.
     #[test]
     fn tracks_sort_correctly() {
-        let mut tracks = vec![
+        let mut tracks = [
             track("Radiohead", "OK Computer", "Karma Police"),
             track("Radiohead", "Kid A", "Everything in Its Right Place"),
             track("David Bowie", "Ziggy Stardust", "Starman"),

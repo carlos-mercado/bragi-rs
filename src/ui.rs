@@ -23,16 +23,16 @@ impl Widget for &App {
 
         let mut selection_state = ListState::default().with_selected(Some(self.cursor));
         let music_preview = Block::bordered().title_top("Now Playing");
-
         let binding = Arc::clone(&self.playback_mode);
         let state = binding.lock().unwrap();
-        if let Some(selected_track) = &self.playing_song {
-            if *state == PlaybackMode::Playing || *state == PlaybackMode::Paused {
-                Paragraph::new(Text::from(selected_track))
-                    .centered()
-                    .block(music_preview)
-                    .render(info_area, buf);
-            }
+
+        if let Some(selected_track) = &self.playing_song
+            && (*state == PlaybackMode::Playing || *state == PlaybackMode::Paused)
+        {
+            Paragraph::new(Text::from(selected_track))
+                .centered()
+                .block(music_preview)
+                .render(info_area, buf);
         }
         std::mem::drop(state);
 
@@ -53,14 +53,14 @@ impl Widget for &App {
                 .highlight_symbol(">>");
         } else {
             match self.viewer {
-                Page::AlbumsView => {
+                Page::Albums => {
                     music_selection = List::new(&self.albums)
                         .block(Block::bordered().title_top(list_title))
                         .style(ratatui::style::Style::default().fg(Color::White))
                         .highlight_style(Style::new().italic().bold())
                         .highlight_symbol(">>");
                 }
-                Page::SongsView => {
+                Page::Songs => {
                     let songs: Vec<TrackDetails> =
                         self.album_selected.as_ref().unwrap().songs.clone();
 
@@ -70,7 +70,7 @@ impl Widget for &App {
                         .highlight_style(Style::new().italic().bold())
                         .highlight_symbol(">>");
                 }
-                Page::SearchView => {
+                Page::Search => {
                     let songs: Vec<TrackDetails> = self.page_songs.clone();
 
                     music_selection = List::new(&songs)

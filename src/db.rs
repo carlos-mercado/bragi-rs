@@ -4,6 +4,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 // path => (last_played, duration_played, track_added)
 const TRACK_DETAILS: TableDefinition<&str, (u64, u64, u64)> = TableDefinition::new("tracks.db");
+
+// song_path => playlist
 const PLAYLISTS: MultimapTableDefinition<&str, &str> = MultimapTableDefinition::new("playlists.db");
 
 pub fn db_setup() -> Option<Database> {
@@ -26,9 +28,7 @@ pub fn db_setup() -> Option<Database> {
 // if an song_path already exsits in the table read, adn return
 // otherwise create a new entry with default values,
 pub fn read_or_insert(possible_db: Option<&Database>, query: &str) -> Option<(u64, u64, u64)> {
-    let Some(db) = possible_db else {
-        return None;
-    };
+    let db = possible_db?;
 
     {
         let read_tx = db.begin_read().ok()?;
@@ -116,16 +116,17 @@ pub fn add_playlist_labels(db: &Database, query_path: &str, label: &str) -> Resu
     Ok(())
 }
 
-pub fn get_playlist_labels(possible_db: Option<&Database>, query_path: &str) -> Option<Vec<String>> {
-    let Some(db) = possible_db else {
-        return None;
-    };
+pub fn get_playlist_labels(
+    possible_db: Option<&Database>,
+    query_path: &str,
+) -> Option<Vec<String>> {
+    let db = possible_db?;
 
     let read_txn = db.begin_read().ok()?;
     let table = read_txn.open_multimap_table(PLAYLISTS).ok()?;
-    let mut values = table.get(query_path).ok()?;
+    let values = table.get(query_path).ok()?;
     let mut labels_vec = Vec::new();
-    while let Some(v) = values.next() {
+    for v in values {
         labels_vec.push(v.ok()?.value().to_string());
     }
 
@@ -186,7 +187,7 @@ mod tests {
         let labels = labels();
 
         for (i, label) in labels.iter().enumerate() {
-            add_playlist_labels(&db, test_song, &label).unwrap();
+            add_playlist_labels(&db, test_song, label).unwrap();
             let returned_labels = get_playlist_labels(Some(&db), test_song).unwrap();
             assert_eq!(returned_labels, labels[..i + 1]);
         }
@@ -203,7 +204,11 @@ mod tests {
         }
         wipe_playlist_labels(&db, test_song).unwrap();
 
-        assert!(get_playlist_labels(Some( &db ), test_song).unwrap().is_empty());
+        assert!(
+            get_playlist_labels(Some(&db), test_song)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

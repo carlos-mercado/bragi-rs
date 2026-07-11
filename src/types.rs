@@ -22,19 +22,19 @@ pub enum PlaybackMode {
 
 pub enum MusicStreamEvent {
     //NewSongEvent(TrackDetails),
-    NewPlaylistEvent(Vec<TrackDetails>),
-    PlaybackEvent(PlaybackMode),
-    TrackAutoAdvanced(TrackDetails),
+    NewPlaylistEvent(Vec<TrackDetails>, u64),
+    PlaybackEvent(PlaybackMode, u64),
+    TrackAutoAdvanced(TrackDetails, u64),
 }
 
 #[derive(PartialEq)]
 pub enum Page {
     // this is the default page
-    AlbumsView,
+    Albums,
     // user got to this page via album-selection
-    SongsView,
+    Songs,
     // user got to this page via search
-    SearchView,
+    Search,
 }
 
 pub enum DbUpdate {
@@ -48,4 +48,3 @@ pub enum LocalTrackUpdateType {
     AddLabel(SongPath, Label),
     WipeLabels(SongPath),
 }
-
