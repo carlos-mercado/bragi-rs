@@ -24,18 +24,21 @@ use redb::Database;
 pub struct App {
     pub exit: bool,
     pub cursor: usize,
+    pub albums_cursor: usize,
     pub all_songs: Vec<TrackDetails>,
+    pub mode: VimMode,
+    pub viewer: Page,
+
     // page_songs represents all songs visible after
     // selecting an album, or searching.
+    // it's a subset of all_songs
     pub page_songs: Vec<TrackDetails>,
     pub albums: Vec<Album>,
     pub playing_song: Option<TrackDetails>,
     pub playing_song_idx: Option<usize>,
     pub album_selected: Option<Album>,
 
-    // this is the actual song queue
-    pub playlist_selected: Option<Vec<TrackDetails>>,
-
+    pub song_queue: Option<Vec<TrackDetails>>,
     pub play_start: Option<Instant>,
     pub elapsed_before_paused: Duration,
     pub sender: Sender<MusicStreamEvent>,
@@ -47,9 +50,8 @@ pub struct App {
     pub key_pressed_time: Instant,
     pub playback_event_receiver: Option<Receiver<MusicStreamEvent>>,
     pub db: Option<Database>,
-
-    pub mode: VimMode,
-    pub viewer: Page,
+    pub yank_buff: Vec<TrackDetails>,
+    pub vline_begin: Option<usize>,
 }
 
 impl App {
@@ -90,8 +92,11 @@ impl App {
             key_pressed_time: Instant::now(),
             playback_event_receiver: None,
             db,
-            playlist_selected: None,
+            song_queue: None,
+            vline_begin: None,
             viewer: Page::Albums,
+            yank_buff: Vec::new(),
+            albums_cursor: 0,
         };
 
         app.playback();
@@ -123,9 +128,8 @@ impl App {
 
             // the previous song played to completion, add the duration of the
             // track to the track statistics
-            let prev_song = self.playlist_selected.as_ref().unwrap()
-                [&self.playing_song_idx.unwrap() - 1]
-                .clone();
+            let prev_song =
+                self.song_queue.as_ref().unwrap()[&self.playing_song_idx.unwrap() - 1].clone();
 
             self.update_db(DbUpdate::DurationPlayed(
                 prev_song.song_path.clone(),
@@ -160,6 +164,10 @@ impl App {
                     KeyCode::Char('l') => self.next_song(),
                     KeyCode::Char('/') => self.mode = VimMode::Search,
                     KeyCode::Char(':') => self.mode = VimMode::Command,
+                    KeyCode::Char('V') => {
+                        self.mode = VimMode::VisualLine;
+                        self.vline_begin = Some(self.cursor);
+                    }
                     KeyCode::Char('m') => {
                         self.mode = {
                             if self.viewer != Page::Albums {
@@ -169,6 +177,20 @@ impl App {
                             }
                         }
                     }
+                    KeyCode::Char('p') => match self.viewer {
+                        Page::Albums => {
+                            unimplemented!()
+                        }
+                        Page::Songs | Page::Search => {
+                            if self.page_songs.is_empty() {
+                                self.page_songs = self.yank_buff.clone();
+                                return;
+                            }
+
+                            self.page_songs
+                                .splice(self.cursor + 1..self.cursor + 1, self.yank_buff.clone());
+                        }
+                    },
                     KeyCode::Char('g') => {
                         let timeout = Duration::from_millis(300);
                         if self.last_key == 'g' && self.key_pressed_time.elapsed() < timeout {
@@ -179,29 +201,56 @@ impl App {
                             self.key_pressed_time = Instant::now();
                         }
                     }
+                    KeyCode::Char('y') => {
+                        let timeout = Duration::from_millis(300);
+                        if self.last_key == 'y' && self.key_pressed_time.elapsed() < timeout {
+                            match self.viewer {
+                                Page::Search | Page::Songs => {
+                                    self.yank_buff = vec![self.page_songs[self.cursor].clone()];
+                                }
+                                Page::Albums => {
+                                    self.yank_buff = self.albums[self.cursor].songs.clone();
+                                }
+                            }
+                            self.last_key = ' ';
+                        } else {
+                            self.last_key = 'y';
+                            self.key_pressed_time = Instant::now();
+                        }
+                    }
+                    KeyCode::Char('d') => {
+                        let timeout = Duration::from_millis(300);
+                        if self.last_key == 'd'
+                            && self.key_pressed_time.elapsed() < timeout
+                            && !self.page_songs.is_empty()
+                        {
+                            match self.viewer {
+                                Page::Search | Page::Songs => {
+                                    self.yank_buff = vec![self.page_songs[self.cursor].clone()];
+                                    self.page_songs.remove(self.cursor);
+                                }
+                                Page::Albums => {
+                                    self.yank_buff = self.albums[self.cursor].songs.clone();
+                                    self.albums.remove(self.cursor);
+                                }
+                            }
+
+                            self.decrement_counter();
+                            self.last_key = ' ';
+                        } else {
+                            self.last_key = 'd';
+                            self.key_pressed_time = Instant::now();
+                        }
+                    }
                     KeyCode::Char('G') => match self.viewer {
                         Page::Albums => {
                             self.cursor = self.albums.len() - 1;
                         }
-                        Page::Songs => {
-                            self.cursor = self
-                                .album_selected
-                                .as_ref()
-                                .expect("this playlist should have been non-empty")
-                                .songs
-                                .len()
-                                - 1;
-                        }
-                        Page::Search => {
-                            self.cursor = self
-                                .playlist_selected
-                                .as_ref()
-                                .expect("this playlist should have been non-empty")
-                                .len()
-                                - 1;
+                        Page::Songs | Page::Search => {
+                            self.cursor = self.page_songs.len() - 1;
                         }
                     },
-                    KeyCode::Char('p') => {
+                    KeyCode::Char(' ') => {
                         let binding = Arc::clone(&self.playback_mode);
                         let mut state = binding.lock().unwrap();
                         match *state {
@@ -223,7 +272,7 @@ impl App {
                         }
                     }
                     KeyCode::Esc => {
-                        self.cursor = 0;
+                        self.cursor = self.albums_cursor;
                         self.user_buff.clear();
                         self.mode = VimMode::Normal;
                         self.viewer = Page::Albums;
@@ -239,6 +288,8 @@ impl App {
                             Page::Albums => {
                                 self.album_selected = Some(self.albums[self.cursor].clone());
                                 self.viewer = Page::Songs;
+                                self.page_songs =
+                                    self.album_selected.as_ref().unwrap().songs.clone();
                                 self.cursor = 0;
                             }
                             _ => {
@@ -260,20 +311,17 @@ impl App {
                                 }
 
                                 self.playing_song_idx = Some(self.cursor);
-                                self.playlist_selected = match &self.album_selected {
-                                    Some(album) => Some(album.songs.clone()),
-                                    None => Some(self.page_songs.clone()),
-                                };
+                                self.song_queue = Some(self.page_songs.clone());
 
                                 self.playing_song = Some(
-                                    self.playlist_selected.as_ref().unwrap()
+                                    self.song_queue.as_ref().unwrap()
                                         [self.playing_song_idx.unwrap()]
                                     .clone(),
                                 );
                                 self.sender
                                     .send(MusicStreamEvent::NewPlaylistEvent(
-                                        self.playlist_selected.as_ref().unwrap().clone(),
-                                        self.cursor as u64,
+                                        self.song_queue.as_ref().unwrap().clone(),
+                                        self.cursor,
                                     ))
                                     .expect("Could not send through channel");
 
@@ -323,7 +371,6 @@ impl App {
                     self.cursor = 0;
                     self.user_buff.clear();
                     self.mode = VimMode::Normal;
-                    self.playlist_selected = Some(self.page_songs.to_vec());
                     self.viewer = Page::Search;
                 }
                 KeyCode::Esc => {
@@ -374,15 +421,7 @@ impl App {
                 KeyCode::Enter => {
                     if let Some(db) = &self.db {
                         let song_path = match self.viewer {
-                            Page::Songs => {
-                                let song_path = self.album_selected.as_ref().unwrap().songs
-                                    [self.cursor]
-                                    .song_path
-                                    .clone();
-                                add_playlist_labels(db, &song_path, &self.user_buff).unwrap();
-                                song_path
-                            }
-                            Page::Search => {
+                            Page::Songs | Page::Search => {
                                 let song_path = self.page_songs[self.cursor].song_path.clone();
                                 add_playlist_labels(db, &song_path, &self.user_buff).unwrap();
                                 song_path
@@ -412,15 +451,7 @@ impl App {
                 KeyCode::Delete => {
                     if let Some(db) = &self.db {
                         let song_path = match self.viewer {
-                            Page::Songs => {
-                                let song_path = self.album_selected.as_ref().unwrap().songs
-                                    [self.cursor]
-                                    .song_path
-                                    .clone();
-                                wipe_playlist_labels(db, &song_path).unwrap();
-                                song_path
-                            }
-                            Page::Search => {
+                            Page::Songs | Page::Search => {
                                 let song_path = self.page_songs[self.cursor].song_path.clone();
                                 wipe_playlist_labels(db, &song_path).unwrap();
                                 song_path
@@ -438,6 +469,69 @@ impl App {
                     }
                     self.user_buff.clear();
                     self.mode = VimMode::Normal;
+                }
+                _ => {}
+            },
+            VimMode::VisualLine => match key_event.code {
+                KeyCode::Char('j') => {
+                    self.increment_counter();
+                }
+                KeyCode::Char('k') => {
+                    self.decrement_counter();
+                }
+                KeyCode::Char('d') => {
+                    // yank the songs from vline_begin to now
+                    match self.viewer {
+                        Page::Albums => {
+                            unimplemented!()
+                        }
+                        Page::Songs | Page::Search => {
+                            if let Some(begin) = self.vline_begin {
+                                self.yank_buff.clear();
+                                self.yank_buff.extend_from_slice(
+                                    &self.page_songs[std::cmp::min(begin, self.cursor)
+                                        ..std::cmp::max(self.cursor + 1, begin)],
+                                );
+                                self.page_songs.drain(
+                                    std::cmp::min(begin, self.cursor)
+                                        ..std::cmp::max(self.cursor + 1, begin),
+                                );
+                            }
+                        }
+                    }
+
+                    self.mode = VimMode::Normal;
+                }
+                KeyCode::Char('y') => {
+                    // yank the songs from vline_begin to now
+                    match self.viewer {
+                        Page::Albums => {
+                            unimplemented!()
+                        }
+                        Page::Songs | Page::Search => {
+                            if let Some(begin) = self.vline_begin {
+                                self.yank_buff.clear();
+                                self.yank_buff.extend_from_slice(
+                                    &self.page_songs[std::cmp::min(begin, self.cursor)
+                                        ..std::cmp::max(self.cursor + 1, begin)],
+                                );
+                            }
+                        }
+                    }
+
+                    self.mode = VimMode::Normal;
+                }
+                KeyCode::Enter => {
+                    self.parse_command();
+                    self.user_buff.clear();
+                    self.mode = VimMode::Normal;
+                    self.viewer = Page::Albums;
+                }
+                KeyCode::Esc => {
+                    self.cursor = 0;
+                    self.user_buff.clear();
+                    self.mode = VimMode::Normal;
+                    self.viewer = Page::Albums;
                 }
                 _ => {}
             },
@@ -485,39 +579,33 @@ impl App {
         match self.viewer {
             Page::Albums => {
                 self.cursor = std::cmp::min(self.albums.len() - 1, self.cursor + 1);
+                self.albums_cursor = self.cursor;
             }
-            Page::Songs => {
-                self.cursor = std::cmp::min(
-                    self.album_selected.as_ref().unwrap().songs.len() - 1,
-                    self.cursor + 1,
-                );
-            }
-            Page::Search => {
-                self.cursor = std::cmp::min(
-                    self.playlist_selected.as_ref().unwrap().len() - 1,
-                    self.cursor + 1,
-                );
+            Page::Songs | Page::Search => {
+                self.cursor = std::cmp::min(self.page_songs.len() - 1, self.cursor + 1);
             }
         }
     }
 
     fn decrement_counter(&mut self) {
+        if self.viewer == Page::Albums {
+            self.albums_cursor = std::cmp::max(0_i32, self.cursor as i32 - 1) as usize;
+        }
         self.cursor = std::cmp::max(0_i32, self.cursor as i32 - 1) as usize;
     }
 
     fn next_song(&mut self) {
-        if self.playlist_selected.is_none() {
+        if self.song_queue.is_none() {
             return;
         }
-
-        let len = self.playlist_selected.as_ref().unwrap().len();
+        let len = self.song_queue.as_ref().unwrap().len();
         if self.playing_song_idx.unwrap() + 1 >= len {
             return;
         }
 
         self.playing_song_idx = Some(self.playing_song_idx.unwrap() + 1);
         let next_song: Option<TrackDetails> = self
-            .playlist_selected
+            .song_queue
             .as_ref()
             .unwrap()
             .get(self.playing_song_idx.unwrap())
@@ -527,17 +615,14 @@ impl App {
 
         self.sender
             .send(MusicStreamEvent::NewPlaylistEvent(
-                self.playlist_selected.clone().unwrap(),
-                self.playing_song_idx.unwrap() as u64,
+                self.song_queue.clone().unwrap(),
+                self.playing_song_idx.unwrap(),
             ))
             .expect("Could not send through channel");
     }
 
     fn prev_song(&mut self) {
-        if self.album_selected.is_none()
-            || self.playing_song.is_none()
-            || self.playing_song_idx.is_none()
-        {
+        if self.song_queue.is_none() {
             return;
         }
         if self.playing_song_idx.unwrap() as i32 - 1 < 0 {
@@ -546,7 +631,7 @@ impl App {
 
         self.playing_song_idx = Some(self.playing_song_idx.unwrap() - 1);
         let prev_song: Option<TrackDetails> = self
-            .playlist_selected
+            .song_queue
             .as_ref()
             .unwrap()
             .get(self.playing_song_idx.unwrap())
@@ -556,8 +641,8 @@ impl App {
 
         self.sender
             .send(MusicStreamEvent::NewPlaylistEvent(
-                self.playlist_selected.clone().unwrap(),
-                self.playing_song_idx.unwrap() as u64,
+                self.song_queue.clone().unwrap(),
+                self.playing_song_idx.unwrap(),
             ))
             .expect("Could not send through channel");
     }
@@ -610,9 +695,7 @@ impl App {
                     }
                     Page::Search => {
                         let song_ref = self
-                            .playlist_selected
-                            .as_mut()
-                            .unwrap()
+                            .page_songs
                             .iter_mut()
                             .find(|song| song.song_path == song_path.0);
 
@@ -671,12 +754,7 @@ impl App {
                 albums_ref.stats.0 = now;
 
                 match self.viewer {
-                    Page::Songs => {
-                        self.album_selected.as_mut().unwrap().songs[self.cursor]
-                            .stats
-                            .0 = now;
-                    }
-                    Page::Search => self.page_songs[self.cursor].stats.0 = now,
+                    Page::Search | Page::Songs => self.page_songs[self.cursor].stats.0 = now,
                     _ => {}
                 }
 
@@ -714,13 +792,12 @@ impl App {
     fn playback(&mut self) {
         let (track_sender, track_receiver) = channel::<MusicStreamEvent>();
         self.playback_event_receiver = Some(track_receiver);
-
         let Some(receiver) = self.receiver.take() else {
             return;
         };
+
         let mixer = self.audio_handle.mixer().clone();
         let playback_mode = Arc::clone(&self.playback_mode);
-
         let _thread_handle = thread::spawn(move || {
             let (mut playlist, mut track_no) = match receiver.recv() {
                 Ok(MusicStreamEvent::NewPlaylistEvent(playlist, track_no)) => (playlist, track_no),
@@ -728,7 +805,7 @@ impl App {
             };
 
             'song_loop: loop {
-                let current_track = playlist[track_no as usize].clone();
+                let current_track = playlist[track_no].clone();
                 let song_path = current_track.song_path;
                 let file = BufReader::new(File::open(song_path).unwrap());
                 let mut song_time_remaining = Duration::from_secs(current_track.duration);
@@ -768,12 +845,12 @@ impl App {
                             _ => {}
                         },
                         Ok(MusicStreamEvent::TrackAutoAdvanced(_, _)) => {
-                            todo!()
+                            unimplemented!();
                         }
                         Err(RecvTimeoutError::Timeout) => {
                             // played playlist to it's conclusion
                             // clean up app state
-                            if track_no == (playlist.len() - 1) as u64 {
+                            if track_no == playlist.len() - 1 {
                                 let mut state = playback_mode.lock().unwrap();
                                 *state = PlaybackMode::NotPlaying;
                             }
@@ -784,7 +861,7 @@ impl App {
                                 track_no += 1;
                                 track_sender
                                     .send(MusicStreamEvent::TrackAutoAdvanced(
-                                        playlist[track_no as usize].clone(),
+                                        playlist[track_no].clone(),
                                         track_no,
                                     ))
                                     .ok();

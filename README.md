@@ -5,21 +5,18 @@
 
 ### Keybinds
 
-- `j`: move down.
-- `k`: move up.
-- `gg`: move to the top of the selection space.
-- `G`: move to the bottom of the selection space.
-- `/`: enter search mode.
-- `p`: pause / play the song.
-- `h`: previous song.
-- `l`: next song.
-- `m`: Tag a song.
-
+- `j`: move down
+- `k`: move up
+- `h`: previous song
+- `l`: next song
+- `/`: enter search mode
+- `SPACE`: pause / play the song
+- `m`: Tag a song with a label.
 - `Esc`:
-  - if in search mode: break out of search mode, return to playlist.
-  - if in normal mode: move back to album selection.
+  - if in any mode other than normal, return back to normal mode.
+  - if already in normal mode, return to album selection.
 - `Enter`:
-  - if in search mode: move into playlist with songs selected by search buffer.
+  - if searching: submit search query, and filter songs.
   - if in normal mode: open an album, or play a song.
 
 ### Disclaimers

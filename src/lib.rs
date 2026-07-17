@@ -22,7 +22,7 @@ pub struct Album {
     pub stats: (u64, u64, u64),
 }
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct TrackDetails {
     pub artist: String,
     pub album: String,
@@ -57,15 +57,8 @@ impl From<TrackDetails> for Text<'static> {
 impl From<&TrackDetails> for Text<'static> {
     fn from(track: &TrackDetails) -> Self {
         Text::from(format!(
-            "{} - {} ({}) [Track {}] {:?} (last_played: {}, duration_played: {}, date_added: {})",
-            track.artist,
-            track.title,
-            track.date,
-            track.track_no,
-            track.tags,
-            track.stats.0,
-            track.stats.1,
-            track.stats.2
+            "{} - {} ({}) [Track {}] {:?}", //  (last_played: {}, duration_played: {}, date_added: {})",
+            track.artist, track.title, track.date, track.track_no, track.tags,
         ))
     }
 }

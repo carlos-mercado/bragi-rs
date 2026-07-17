@@ -41,6 +41,7 @@ impl Widget for &App {
             VimMode::Search => format!("Searching: {}", self.user_buff),
             VimMode::Command => format!("cmd: {}", self.user_buff),
             VimMode::Marking => format!("Marking: {}", self.user_buff),
+            VimMode::VisualLine => "V-LINE".to_string(),
         };
 
         let music_selection;
@@ -60,17 +61,7 @@ impl Widget for &App {
                         .highlight_style(Style::new().italic().bold())
                         .highlight_symbol(">>");
                 }
-                Page::Songs => {
-                    let songs: Vec<TrackDetails> =
-                        self.album_selected.as_ref().unwrap().songs.clone();
-
-                    music_selection = List::new(&songs)
-                        .block(Block::bordered().title_top(list_title))
-                        .style(ratatui::style::Style::default().fg(Color::White))
-                        .highlight_style(Style::new().italic().bold())
-                        .highlight_symbol(">>");
-                }
-                Page::Search => {
+                Page::Songs | Page::Search => {
                     let songs: Vec<TrackDetails> = self.page_songs.clone();
 
                     music_selection = List::new(&songs)

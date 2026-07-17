@@ -11,6 +11,7 @@ pub enum VimMode {
     Normal,
     Command,
     Marking,
+    VisualLine,
 }
 
 #[derive(PartialEq)]
@@ -21,10 +22,15 @@ pub enum PlaybackMode {
 }
 
 pub enum MusicStreamEvent {
-    //NewSongEvent(TrackDetails),
-    NewPlaylistEvent(Vec<TrackDetails>, u64),
-    PlaybackEvent(PlaybackMode, u64),
-    TrackAutoAdvanced(TrackDetails, u64),
+    // user pressed selected a new playlist
+    // represened as (playlist, song_selected_idx).
+    NewPlaylistEvent(Vec<TrackDetails>, usize),
+    // user paused, resumed, or completed the song
+    // represened as (PlaybackMode, song_selected_idx).
+    PlaybackEvent(PlaybackMode, usize),
+    // a track played to completion and the next song is now
+    // playing. (next_song_info, next_song_idx).
+    TrackAutoAdvanced(TrackDetails, usize),
 }
 
 #[derive(PartialEq)]
