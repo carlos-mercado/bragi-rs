@@ -6,6 +6,7 @@ pkgs.mkShell {
     pkgs.rustup
     pkgs.glib
     pkgs.alsa-utils 
+    pkgs.alsa-lib
     pkgs.pipewire
   ];
   shellHook = ''
