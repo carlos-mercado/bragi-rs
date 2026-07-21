@@ -1,7 +1,7 @@
 use crate::app::App;
 use crate::types::Page;
 use crate::types::{PlaybackMode, VimMode};
-use music::TrackDetails;
+use music::{TrackDetails, get_song_art};
 use ratatui::prelude::Text;
 use ratatui::{
     buffer::Buffer,
@@ -10,6 +10,7 @@ use ratatui::{
     symbols,
     widgets::{Block, LineGauge, List, ListState, Paragraph, StatefulWidget, Widget},
 };
+use ratatui_image::{Resize, StatefulImage};
 use std::sync::Arc;
 
 impl Widget for &App {
@@ -17,9 +18,12 @@ impl Widget for &App {
         let [selection_area, lower_area] =
             Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(area);
 
-        let [info_area, progress_bar_area] =
-            Layout::vertical([Constraint::Percentage(90), Constraint::Percentage(10)])
-                .areas(lower_area);
+        let [info_area, album_art_area, progress_bar_area] = Layout::vertical([
+            Constraint::Percentage(10),
+            Constraint::Percentage(80),
+            Constraint::Percentage(10),
+        ])
+        .areas(lower_area);
 
         let mut selection_state = ListState::default().with_selected(Some(self.cursor));
         let music_preview = Block::bordered().title_top("Now Playing");
@@ -33,6 +37,34 @@ impl Widget for &App {
                 .centered()
                 .block(music_preview)
                 .render(info_area, buf);
+
+            let cover_path = get_song_art(selected_track);
+
+            if let Some(art_bytes) = cover_path {
+                let mut cache = self.cover_cache.borrow_mut();
+
+                let needs_reload = match cache.as_ref() {
+                    None => true,
+                    Some((cached_art_bytes, _)) => cached_art_bytes != &art_bytes, // Different image
+                };
+
+                if needs_reload && let Ok(img) = image::load_from_memory(&art_bytes) {
+                    let protocol = self.image_picker.new_resize_protocol(img);
+                    *cache = Some((art_bytes, protocol));
+                }
+
+                if let Some((_, protocol)) = cache.as_mut() {
+                    let [_left, centered, _right] = Layout::horizontal([
+                        Constraint::Percentage(40),
+                        Constraint::Percentage(20),
+                        Constraint::Percentage(40),
+                    ])
+                    .areas(album_art_area);
+
+                    let image_widget = StatefulImage::default().resize(Resize::Fit(None));
+                    StatefulWidget::render(image_widget, centered, buf, protocol);
+                }
+            }
         }
         std::mem::drop(state);
 

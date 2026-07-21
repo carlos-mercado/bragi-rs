@@ -214,6 +214,28 @@ fn get_audio_metadata(
     })
 }
 
+pub fn get_song_art(song: &TrackDetails) -> Option<Vec<u8>> {
+    let parent_dir = std::path::Path::new(&song.song_path).parent()?;
+    let target_path = parent_dir.join("cover.jpg");
+
+    match target_path.exists() {
+        true => Some(std::fs::read(&target_path).unwrap()),
+        false => get_embedded_song_art(song),
+    }
+}
+
+pub fn get_embedded_song_art(song: &TrackDetails) -> Option<Vec<u8>> {
+    let tagged_file: TaggedFile = read_from_path(&song.song_path).ok()?;
+    let tag = tagged_file.primary_tag().unwrap();
+    let pics = tag.pictures();
+
+    if pics.is_empty() {
+        return None;
+    }
+
+    Some(pics[0].clone().into_data())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

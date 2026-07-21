@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::fs::File;
 use std::io;
@@ -12,6 +13,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::DefaultTerminal;
 use ratatui::Frame;
+use ratatui_image::picker::Picker;
+use ratatui_image::protocol::StatefulProtocol;
 
 use crate::config::config_init;
 use crate::types::{
@@ -52,6 +55,8 @@ pub struct App {
     pub db: Option<Database>,
     pub yank_buff: Vec<TrackDetails>,
     pub vline_begin: Option<usize>,
+    pub image_picker: Picker,
+    pub cover_cache: RefCell<Option<(Vec<u8>, StatefulProtocol)>>,
 }
 
 impl App {
@@ -70,6 +75,7 @@ impl App {
         let play_start = None;
         let elapsed_before_paused = Duration::from_secs(0);
         let playback_mode = Arc::new(Mutex::new(PlaybackMode::NotPlaying));
+        let image_picker = Picker::from_query_stdio().expect("Could not create image picker");
 
         let mut app = App {
             cursor: 0,
@@ -97,6 +103,8 @@ impl App {
             viewer: Page::Albums,
             yank_buff: Vec::new(),
             albums_cursor: 0,
+            image_picker,
+            cover_cache: RefCell::new(None),
         };
 
         app.playback();
