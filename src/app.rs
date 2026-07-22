@@ -170,7 +170,10 @@ impl App {
                     KeyCode::Char('k') => self.decrement_counter(),
                     KeyCode::Char('h') => self.prev_song(),
                     KeyCode::Char('l') => self.next_song(),
-                    KeyCode::Char('/') => self.mode = VimMode::Search,
+                    KeyCode::Char('/') => {
+                        self.mode = VimMode::Search;
+                        self.viewer = Page::Search;
+                    }
                     KeyCode::Char(':') => self.mode = VimMode::Command,
                     KeyCode::Char('V') => {
                         self.mode = VimMode::VisualLine;
@@ -536,7 +539,6 @@ impl App {
                     self.viewer = Page::Albums;
                 }
                 KeyCode::Esc => {
-                    self.cursor = 0;
                     self.user_buff.clear();
                     self.mode = VimMode::Normal;
                     self.viewer = Page::Albums;

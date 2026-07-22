@@ -1,14 +1,14 @@
 use crate::app::App;
 use crate::types::Page;
 use crate::types::{PlaybackMode, VimMode};
-use music::{TrackDetails, get_song_art};
+use music::get_song_art;
 use ratatui::prelude::Text;
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Layout, Margin, Rect},
     style::{Color, Style},
     symbols,
-    widgets::{Block, LineGauge, List, ListState, Paragraph, StatefulWidget, Widget},
+    widgets::{Block, LineGauge, List, ListItem, ListState, Paragraph, StatefulWidget, Widget},
 };
 use ratatui_image::{Resize, StatefulImage};
 use std::sync::Arc;
@@ -30,6 +30,7 @@ impl Widget for &App {
         let binding = Arc::clone(&self.playback_mode);
         let state = binding.lock().unwrap();
 
+        // display cover art for a song (if it exists)
         if let Some(selected_track) = &self.playing_song
             && (*state == PlaybackMode::Playing || *state == PlaybackMode::Paused)
         {
@@ -40,14 +41,18 @@ impl Widget for &App {
 
             let cover_path = get_song_art(selected_track);
 
+            // the cover art exists
             if let Some(art_bytes) = cover_path {
                 let mut cache = self.cover_cache.borrow_mut();
 
+                // does it match the image in the cache?
                 let needs_reload = match cache.as_ref() {
                     None => true,
-                    Some((cached_art_bytes, _)) => cached_art_bytes != &art_bytes, // Different image
+                    Some((cached_art_bytes, _)) => cached_art_bytes != &art_bytes,
                 };
 
+                // this is a new cover image
+                // replace the one in the cache.
                 if needs_reload && let Ok(img) = image::load_from_memory(&art_bytes) {
                     let protocol = self.image_picker.new_resize_protocol(img);
                     *cache = Some((art_bytes, protocol));
@@ -76,34 +81,54 @@ impl Widget for &App {
             VimMode::VisualLine => "V-LINE".to_string(),
         };
 
-        let music_selection;
+        let music_selection: List = match self.viewer {
+            Page::Albums => {
+                let items: Vec<ListItem> = self
+                    .albums
+                    .iter()
+                    .enumerate()
+                    .map(|(i, song)| {
+                        if self.mode == VimMode::VisualLine
+                            && ((i >= self.vline_begin.unwrap() && i <= self.cursor)
+                                || (i <= self.vline_begin.unwrap() && i >= self.cursor))
+                        {
+                            ListItem::new(song).style(Style::default().bg(Color::LightBlue))
+                        } else {
+                            ListItem::new(song)
+                        }
+                    })
+                    .collect();
 
-        if self.mode == VimMode::Search {
-            music_selection = List::new(&self.page_songs)
-                .block(Block::bordered().title_top(list_title))
-                .style(ratatui::style::Style::default().fg(Color::White))
-                .highlight_style(Style::new().italic().bold())
-                .highlight_symbol(">>");
-        } else {
-            match self.viewer {
-                Page::Albums => {
-                    music_selection = List::new(&self.albums)
-                        .block(Block::bordered().title_top(list_title))
-                        .style(ratatui::style::Style::default().fg(Color::White))
-                        .highlight_style(Style::new().italic().bold())
-                        .highlight_symbol(">>");
-                }
-                Page::Songs | Page::Search => {
-                    let songs: Vec<TrackDetails> = self.page_songs.clone();
-
-                    music_selection = List::new(&songs)
-                        .block(Block::bordered().title_top(list_title))
-                        .style(ratatui::style::Style::default().fg(Color::White))
-                        .highlight_style(Style::new().italic().bold())
-                        .highlight_symbol(">>");
-                }
+                List::new(items)
+                    .block(Block::bordered().title_top(list_title))
+                    .style(Style::default().fg(Color::White))
+                    .highlight_style(Style::new().italic().bold())
+                    .highlight_symbol(">>")
             }
-        }
+            Page::Songs | Page::Search => {
+                let items: Vec<ListItem> = self
+                    .page_songs
+                    .iter()
+                    .enumerate()
+                    .map(|(i, song)| {
+                        if self.mode == VimMode::VisualLine
+                            && ((i >= self.vline_begin.unwrap() && i <= self.cursor)
+                                || (i <= self.vline_begin.unwrap() && i >= self.cursor))
+                        {
+                            ListItem::new(song).style(Style::default().bg(Color::LightBlue))
+                        } else {
+                            ListItem::new(song)
+                        }
+                    })
+                    .collect();
+
+                List::new(items)
+                    .block(Block::bordered().title_top(list_title))
+                    .style(Style::default().fg(Color::White))
+                    .highlight_style(Style::new().italic().bold())
+                    .highlight_symbol(">>")
+            }
+        };
 
         let binding = Arc::clone(&self.playback_mode);
         let playback_state = binding.lock().unwrap();
