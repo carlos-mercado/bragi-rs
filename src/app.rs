@@ -21,8 +21,8 @@ use crate::config::config_init;
 use crate::types::{
     DbUpdate, Label, LocalTrackUpdateType, MusicStreamEvent, Page, PlaybackMode, SongPath, VimMode,
 };
-use music::db::*;
 use music::{Album, TrackDetails, build_albums, filter_tracks, get_music_files};
+use music::{db::*, get_song_art};
 use redb::Database;
 
 pub struct App {
@@ -57,7 +57,8 @@ pub struct App {
     pub yank_buff: Vec<TrackDetails>,
     pub vline_begin: Option<usize>,
     pub image_picker: Picker,
-    pub cover_cache: RefCell<Option<(u64, StatefulProtocol)>>,
+    // bytes, hash, protocol
+    pub cover_art: Option<(Vec<u8>, u64, RefCell<StatefulProtocol>)>,
 }
 
 impl App {
@@ -105,7 +106,7 @@ impl App {
             yank_buff: Vec::new(),
             albums_cursor: 0,
             image_picker,
-            cover_cache: RefCell::new(None),
+            cover_art: None,
         };
 
         app.playback();
@@ -129,27 +130,50 @@ impl App {
             return Ok(());
         };
 
-        if let Ok(MusicStreamEvent::TrackAutoAdvanced(track_details, _i)) = rx.try_recv() {
-            self.play_start = Some(Instant::now());
-            self.elapsed_before_paused = Duration::from_secs(0);
-            self.playing_song = Some(track_details);
-            self.playing_song_idx = Some(self.playing_song_idx.unwrap() + 1);
+        match rx.try_recv() {
+            Ok(MusicStreamEvent::TrackAutoAdvanced(track_details, _i)) => {
+                self.play_start = Some(Instant::now());
+                self.elapsed_before_paused = Duration::from_secs(0);
+                self.playing_song = Some(track_details);
+                self.playing_song_idx = Some(self.playing_song_idx.unwrap() + 1);
 
-            // the previous song played to completion, add the duration of the
-            // track to the track statistics
-            let prev_song =
-                self.song_queue.as_ref().unwrap()[&self.playing_song_idx.unwrap() - 1].clone();
+                // the previous song played to completion, add the duration of the
+                // track to the track statistics
+                let prev_song =
+                    self.song_queue.as_ref().unwrap()[&self.playing_song_idx.unwrap() - 1].clone();
 
-            self.update_db(DbUpdate::DurationPlayed(
-                prev_song.song_path.clone(),
-                prev_song.duration,
-            ));
+                self.update_db(DbUpdate::DurationPlayed(
+                    prev_song.song_path.clone(),
+                    prev_song.duration,
+                ));
 
-            self.update_song_label_local(LocalTrackUpdateType::DurationPlayed(
-                SongPath(prev_song.song_path),
-                prev_song.duration,
-            ));
-        }
+                self.update_song_label_local(LocalTrackUpdateType::DurationPlayed(
+                    SongPath(prev_song.song_path),
+                    prev_song.duration,
+                ));
+
+                let Some(new_song_art) = get_song_art(self.playing_song.as_ref().unwrap()) else {
+                    return Ok(());
+                };
+                let new_song_hash = self.hash_art(&new_song_art);
+                if let Ok(img) = image::load_from_memory(&new_song_art) {
+                    let protocol = self.image_picker.new_resize_protocol(img);
+                    self.cover_art = Some((new_song_art, new_song_hash, RefCell::new(protocol)))
+                };
+            }
+            Ok(MusicStreamEvent::NewPlaylistEvent(_, _i)) => {
+                let Some(new_song_art) = get_song_art(self.playing_song.as_ref().unwrap()) else {
+                    return Ok(());
+                };
+                let new_song_hash = self.hash_art(&new_song_art);
+                if let Ok(img) = image::load_from_memory(&new_song_art) {
+                    let protocol = self.image_picker.new_resize_protocol(img);
+                    self.cover_art = Some((new_song_art, new_song_hash, RefCell::new(protocol)))
+                };
+            }
+            Ok(MusicStreamEvent::PlaybackEvent(_, _)) => unimplemented!(),
+            Err(_) => {}
+        };
 
         if event::poll(Duration::from_millis(500))? {
             match event::read()? {
@@ -812,7 +836,15 @@ impl App {
         let playback_mode = Arc::clone(&self.playback_mode);
         let _thread_handle = thread::spawn(move || {
             let (mut playlist, mut track_no) = match receiver.recv() {
-                Ok(MusicStreamEvent::NewPlaylistEvent(playlist, track_no)) => (playlist, track_no),
+                Ok(MusicStreamEvent::NewPlaylistEvent(playlist, track_no)) => {
+                    track_sender
+                        .send(MusicStreamEvent::NewPlaylistEvent(
+                            playlist.clone(),
+                            track_no,
+                        ))
+                        .ok();
+                    (playlist, track_no)
+                }
                 _ => return,
             };
 
@@ -838,6 +870,13 @@ impl App {
 
                     match event {
                         Ok(MusicStreamEvent::NewPlaylistEvent(new_playlist, new_idx)) => {
+                            track_sender
+                                .send(MusicStreamEvent::NewPlaylistEvent(
+                                    playlist.clone(),
+                                    track_no,
+                                ))
+                                .ok();
+
                             std::mem::drop(player);
                             playlist = new_playlist;
                             track_no = new_idx;

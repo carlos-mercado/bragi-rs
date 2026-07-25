@@ -220,7 +220,7 @@ pub fn get_song_art(song: &TrackDetails) -> Option<Vec<u8>> {
     let target_path = parent_dir.join("cover.jpg");
 
     match target_path.exists() {
-        true => Some(std::fs::read(&target_path).unwrap_or_default()),
+        true => Some(std::fs::read(&target_path).ok()?),
         false => get_embedded_song_art(song),
     }
 }

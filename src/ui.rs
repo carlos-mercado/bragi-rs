@@ -1,7 +1,6 @@
 use crate::app::App;
 use crate::types::Page;
 use crate::types::{PlaybackMode, VimMode};
-use music::get_song_art;
 use ratatui::prelude::Text;
 use ratatui::{
     buffer::Buffer,
@@ -39,39 +38,17 @@ impl Widget for &App {
                 .block(music_preview)
                 .render(info_area, buf);
 
-            let cover_art = get_song_art(selected_track);
+            if let Some((_bytes, _hash, protocol)) = &self.cover_art {
+                let [_left, centered, _right] = Layout::horizontal([
+                    Constraint::Percentage(40),
+                    Constraint::Percentage(20),
+                    Constraint::Percentage(40),
+                ])
+                .areas(album_art_area);
 
-            // the cover art exists
-            if let Some(art_bytes) = cover_art {
-                let hashed_bytes = self.hash_art(&art_bytes);
-
-                let mut cache = self.cover_cache.borrow_mut();
-
-                // does it match the image in the cache?
-                let needs_reload = match cache.as_ref() {
-                    None => true,
-                    Some((cached_art_bytes, _)) => cached_art_bytes != &hashed_bytes,
-                };
-
-                // this is a new cover image
-                // replace the one in the cache.
-                if needs_reload && let Ok(img) = image::load_from_memory(&art_bytes) {
-                    let protocol = self.image_picker.new_resize_protocol(img);
-                    *cache = Some((hashed_bytes, protocol));
-                }
-
-                if let Some((_, protocol)) = cache.as_mut() {
-                    let [_left, centered, _right] = Layout::horizontal([
-                        Constraint::Percentage(40),
-                        Constraint::Percentage(20),
-                        Constraint::Percentage(40),
-                    ])
-                    .areas(album_art_area);
-
-                    let image_widget = StatefulImage::default().resize(Resize::Fit(None));
-                    StatefulWidget::render(image_widget, centered, buf, protocol);
-                }
-            }
+                let image_widget = StatefulImage::default().resize(Resize::Fit(None));
+                StatefulWidget::render(image_widget, centered, buf, &mut *protocol.borrow_mut());
+            };
         }
         std::mem::drop(state);
 
