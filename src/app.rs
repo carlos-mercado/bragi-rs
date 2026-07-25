@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::fs::File;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io;
 use std::io::BufReader;
 use std::path::Path;
@@ -56,7 +57,7 @@ pub struct App {
     pub yank_buff: Vec<TrackDetails>,
     pub vline_begin: Option<usize>,
     pub image_picker: Picker,
-    pub cover_cache: RefCell<Option<(Vec<u8>, StatefulProtocol)>>,
+    pub cover_cache: RefCell<Option<(u64, StatefulProtocol)>>,
 }
 
 impl App {
@@ -507,6 +508,7 @@ impl App {
                                     std::cmp::min(begin, self.cursor)
                                         ..std::cmp::max(self.cursor + 1, begin),
                                 );
+                                self.cursor = std::cmp::min(begin, self.cursor);
                             }
                         }
                     }
@@ -883,5 +885,11 @@ impl App {
                 }
             }
         });
+    }
+
+    pub fn hash_art(&self, song: &Vec<u8>) -> u64 {
+        let mut s = DefaultHasher::new();
+        song.hash(&mut s);
+        s.finish()
     }
 }

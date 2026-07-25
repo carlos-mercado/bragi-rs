@@ -5,6 +5,7 @@ use redb::Database;
 use std::cmp::Ord;
 use std::collections::HashMap;
 use std::fs::{self, DirEntry};
+use std::hash::Hash;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -22,7 +23,7 @@ pub struct Album {
     pub stats: (u64, u64, u64),
 }
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 pub struct TrackDetails {
     pub artist: String,
     pub album: String,
@@ -219,7 +220,7 @@ pub fn get_song_art(song: &TrackDetails) -> Option<Vec<u8>> {
     let target_path = parent_dir.join("cover.jpg");
 
     match target_path.exists() {
-        true => Some(std::fs::read(&target_path).unwrap()),
+        true => Some(std::fs::read(&target_path).unwrap_or_default()),
         false => get_embedded_song_art(song),
     }
 }
