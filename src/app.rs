@@ -587,15 +587,24 @@ impl App {
         if args[0] == "sort" {
             let sort_by_this = args[1];
             match sort_by_this {
-                "last_played" => {
-                    self.albums.sort_by_key(|a| Reverse(a.stats.0));
-                }
-                "duration_played" => {
-                    self.albums.sort_by_key(|a| Reverse(a.stats.1));
-                }
-                "date_added" => {
-                    self.albums.sort_by_key(|a| Reverse(a.stats.2));
-                }
+                "last_played" => match self.viewer {
+                    Page::Albums => self.albums.sort_by_key(|a| Reverse(a.stats.0)),
+                    Page::Songs | Page::Search => {
+                        self.page_songs.sort_by_key(|s| Reverse(s.stats.0))
+                    }
+                },
+                "duration_played" => match self.viewer {
+                    Page::Albums => self.albums.sort_by_key(|a| Reverse(a.stats.1)),
+                    Page::Songs | Page::Search => {
+                        self.page_songs.sort_by_key(|s| Reverse(s.stats.1))
+                    }
+                },
+                "date_added" => match self.viewer {
+                    Page::Albums => self.albums.sort_by_key(|a| Reverse(a.stats.2)),
+                    Page::Songs | Page::Search => {
+                        self.page_songs.sort_by_key(|s| Reverse(s.stats.2))
+                    }
+                },
                 _ => {
                     self.albums.sort();
                 }
