@@ -152,24 +152,55 @@ impl App {
                     prev_song.duration,
                 ));
 
+                // if the cover art for the new track is different, update it.
+                // other wise, don't worry about it
                 let Some(new_song_art) = get_song_art(self.playing_song.as_ref().unwrap()) else {
                     return Ok(());
                 };
                 let new_song_hash = self.hash_art(&new_song_art);
-                if let Ok(img) = image::load_from_memory(&new_song_art) {
-                    let protocol = self.image_picker.new_resize_protocol(img);
-                    self.cover_art = Some((new_song_art, new_song_hash, RefCell::new(protocol)))
-                };
+                match &self.cover_art {
+                    Some((_, old_hash, _)) => {
+                        if old_hash != &new_song_hash
+                            && let Ok(img) = image::load_from_memory(&new_song_art)
+                        {
+                            let protocol = self.image_picker.new_resize_protocol(img);
+                            self.cover_art =
+                                Some((new_song_art, new_song_hash, RefCell::new(protocol)))
+                        }
+                    }
+                    None => {
+                        if let Ok(img) = image::load_from_memory(&new_song_art) {
+                            let protocol = self.image_picker.new_resize_protocol(img);
+                            self.cover_art =
+                                Some((new_song_art, new_song_hash, RefCell::new(protocol)))
+                        };
+                    }
+                }
             }
             Ok(MusicStreamEvent::NewPlaylistEvent(_, _i)) => {
                 let Some(new_song_art) = get_song_art(self.playing_song.as_ref().unwrap()) else {
                     return Ok(());
                 };
+
                 let new_song_hash = self.hash_art(&new_song_art);
-                if let Ok(img) = image::load_from_memory(&new_song_art) {
-                    let protocol = self.image_picker.new_resize_protocol(img);
-                    self.cover_art = Some((new_song_art, new_song_hash, RefCell::new(protocol)))
-                };
+                match &self.cover_art {
+                    Some((_bytes, old_hash, _protocol)) => {
+                        if old_hash != &new_song_hash
+                            && let Ok(img) = image::load_from_memory(&new_song_art)
+                        {
+                            let protocol = self.image_picker.new_resize_protocol(img);
+                            self.cover_art =
+                                Some((new_song_art, new_song_hash, RefCell::new(protocol)))
+                        }
+                    }
+                    None => {
+                        if let Ok(img) = image::load_from_memory(&new_song_art) {
+                            let protocol = self.image_picker.new_resize_protocol(img);
+                            self.cover_art =
+                                Some((new_song_art, new_song_hash, RefCell::new(protocol)))
+                        };
+                    }
+                }
             }
             Ok(MusicStreamEvent::PlaybackEvent(_, _)) => unimplemented!(),
             Err(_) => {}
@@ -297,6 +328,7 @@ impl App {
                                     .send(MusicStreamEvent::PlaybackEvent(PlaybackMode::Paused, 0))
                                     .expect("Could not send through channel");
                                 self.elapsed_before_paused += self.play_start.unwrap().elapsed();
+                                self.play_start = None;
                             }
                             PlaybackMode::Paused => {
                                 *state = PlaybackMode::Playing;
