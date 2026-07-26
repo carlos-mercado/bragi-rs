@@ -434,13 +434,11 @@ impl App {
                     self.parse_command();
                     self.user_buff.clear();
                     self.mode = VimMode::Normal;
-                    self.viewer = Page::Albums;
                 }
                 KeyCode::Esc => {
                     self.cursor = 0;
                     self.user_buff.clear();
                     self.mode = VimMode::Normal;
-                    self.viewer = Page::Albums;
                 }
                 _ => {}
             },
