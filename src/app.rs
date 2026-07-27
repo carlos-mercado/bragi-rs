@@ -136,7 +136,6 @@ impl App {
                 self.elapsed_before_paused = Duration::from_secs(0);
                 self.playing_song = Some(track_details);
                 self.playing_song_idx = Some(self.playing_song_idx.unwrap() + 1);
-
                 // the previous song played to completion, add the duration of the
                 // track to the track statistics
                 let prev_song =
@@ -146,61 +145,14 @@ impl App {
                     prev_song.song_path.clone(),
                     prev_song.duration,
                 ));
-
                 self.update_song_label_local(LocalTrackUpdateType::DurationPlayed(
                     SongPath(prev_song.song_path),
                     prev_song.duration,
                 ));
-
-                // if the cover art for the new track is different, update it.
-                // other wise, don't worry about it
-                let Some(new_song_art) = get_song_art(self.playing_song.as_ref().unwrap()) else {
-                    return Ok(());
-                };
-                let new_song_hash = self.hash_art(&new_song_art);
-                match &self.cover_art {
-                    Some((_, old_hash, _)) => {
-                        if old_hash != &new_song_hash
-                            && let Ok(img) = image::load_from_memory(&new_song_art)
-                        {
-                            let protocol = self.image_picker.new_resize_protocol(img);
-                            self.cover_art =
-                                Some((new_song_art, new_song_hash, RefCell::new(protocol)))
-                        }
-                    }
-                    None => {
-                        if let Ok(img) = image::load_from_memory(&new_song_art) {
-                            let protocol = self.image_picker.new_resize_protocol(img);
-                            self.cover_art =
-                                Some((new_song_art, new_song_hash, RefCell::new(protocol)))
-                        };
-                    }
-                }
+                self.update_song_art_cache();
             }
             Ok(MusicStreamEvent::NewPlaylistEvent(_, _i)) => {
-                let Some(new_song_art) = get_song_art(self.playing_song.as_ref().unwrap()) else {
-                    return Ok(());
-                };
-
-                let new_song_hash = self.hash_art(&new_song_art);
-                match &self.cover_art {
-                    Some((_bytes, old_hash, _protocol)) => {
-                        if old_hash != &new_song_hash
-                            && let Ok(img) = image::load_from_memory(&new_song_art)
-                        {
-                            let protocol = self.image_picker.new_resize_protocol(img);
-                            self.cover_art =
-                                Some((new_song_art, new_song_hash, RefCell::new(protocol)))
-                        }
-                    }
-                    None => {
-                        if let Ok(img) = image::load_from_memory(&new_song_art) {
-                            let protocol = self.image_picker.new_resize_protocol(img);
-                            self.cover_art =
-                                Some((new_song_art, new_song_hash, RefCell::new(protocol)))
-                        };
-                    }
-                }
+                self.update_song_art_cache();
             }
             Ok(MusicStreamEvent::PlaybackEvent(_, _)) => unimplemented!(),
             Err(_) => {}
@@ -969,5 +921,30 @@ impl App {
         let mut s = DefaultHasher::new();
         song.hash(&mut s);
         s.finish()
+    }
+
+    fn update_song_art_cache(&mut self) {
+        // if the cover art for the new track is different, update it.
+        // other wise, don't worry about it
+        let Some(new_song_art) = get_song_art(self.playing_song.as_ref().unwrap()) else {
+            return;
+        };
+        let new_song_hash = self.hash_art(&new_song_art);
+        match &self.cover_art {
+            Some((_, old_hash, _)) => {
+                if old_hash != &new_song_hash
+                    && let Ok(img) = image::load_from_memory(&new_song_art)
+                {
+                    let protocol = self.image_picker.new_resize_protocol(img);
+                    self.cover_art = Some((new_song_art, new_song_hash, RefCell::new(protocol)))
+                }
+            }
+            None => {
+                if let Ok(img) = image::load_from_memory(&new_song_art) {
+                    let protocol = self.image_picker.new_resize_protocol(img);
+                    self.cover_art = Some((new_song_art, new_song_hash, RefCell::new(protocol)))
+                };
+            }
+        }
     }
 }
