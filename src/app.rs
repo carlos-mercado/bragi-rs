@@ -16,6 +16,7 @@ use ratatui::DefaultTerminal;
 use ratatui::Frame;
 use ratatui_image::picker::Picker;
 use ratatui_image::protocol::StatefulProtocol;
+use redb::Database;
 
 use crate::config::config_init;
 use crate::types::{
@@ -23,7 +24,6 @@ use crate::types::{
 };
 use music::{Album, TrackDetails, build_albums, filter_tracks, get_music_files};
 use music::{db::*, get_song_art};
-use redb::Database;
 
 pub struct App {
     pub exit: bool,
@@ -45,14 +45,14 @@ pub struct App {
     pub song_queue: Option<Vec<TrackDetails>>,
     pub play_start: Option<Instant>,
     pub elapsed_before_paused: Duration,
-    pub sender: Sender<MusicStreamEvent>,
-    pub receiver: Option<Receiver<MusicStreamEvent>>,
+    pub playback_sender: Sender<MusicStreamEvent>,
+    pub playback_receiver: Option<Receiver<MusicStreamEvent>>,
     pub playback_mode: Arc<Mutex<PlaybackMode>>,
     pub audio_handle: rodio::MixerDeviceSink,
     pub user_buff: String,
     pub last_key: char,
     pub key_pressed_time: Instant,
-    pub playback_event_receiver: Option<Receiver<MusicStreamEvent>>,
+    pub event_receiver: Option<Receiver<MusicStreamEvent>>,
     pub db: Option<Database>,
     pub yank_buff: Vec<TrackDetails>,
     pub vline_begin: Option<usize>,
@@ -73,7 +73,7 @@ impl App {
         let albums = build_albums(&songs_vec_clone);
         let audio_handle = rodio::DeviceSinkBuilder::open_default_sink()
             .expect("Could not find default audio stream");
-        let (sender, receiver): (Sender<MusicStreamEvent>, Receiver<MusicStreamEvent>) = channel();
+        let (playback_sender, receiver) = channel();
         let play_start = None;
         let elapsed_before_paused = Duration::from_secs(0);
         let playback_mode = Arc::new(Mutex::new(PlaybackMode::NotPlaying));
@@ -89,8 +89,8 @@ impl App {
             album_selected: None,
             play_start,
             elapsed_before_paused,
-            sender,
-            receiver: Some(receiver),
+            playback_sender,
+            playback_receiver: Some(receiver),
             mode: VimMode::Normal,
             playback_mode,
             audio_handle,
@@ -98,7 +98,7 @@ impl App {
             all_songs: songs_vec_clone,
             last_key: ' ',
             key_pressed_time: Instant::now(),
-            playback_event_receiver: None,
+            event_receiver: None,
             db,
             song_queue: None,
             vline_begin: None,
@@ -126,7 +126,7 @@ impl App {
     }
 
     fn handle_events(&mut self) -> io::Result<()> {
-        let Some(ref rx) = self.playback_event_receiver else {
+        let Some(ref rx) = self.event_receiver else {
             return Ok(());
         };
 
@@ -151,7 +151,46 @@ impl App {
                 ));
                 self.update_song_art_cache();
             }
-            Ok(MusicStreamEvent::NewPlaylistEvent(_, _i)) => {
+            Ok(MusicStreamEvent::NewPlaylistEvent(queue, i)) => {
+                // user chose a song
+                //
+                // if there was a previously playing song
+                // update it's stats appropriately
+                if let Some(prev_song) = self.playing_song.clone() {
+                    let dur_played = self.get_time_elapsed().as_secs_f64() as u64;
+                    self.update_song_label_local(LocalTrackUpdateType::DurationPlayed(
+                        SongPath(prev_song.song_path.clone()),
+                        dur_played,
+                    ));
+                    self.update_db(DbUpdate::DurationPlayed(
+                        prev_song.song_path.clone(),
+                        dur_played,
+                    ));
+                }
+
+                self.playing_song_idx = Some(i);
+                self.playing_song = Some(queue[i].clone());
+                self.song_queue = Some(queue);
+
+                let binding = Arc::clone(&self.playback_mode);
+                let mut state = binding.lock().unwrap();
+                *state = PlaybackMode::Playing;
+
+                self.update_db(DbUpdate::LastPlayed(
+                    self.playing_song
+                        .clone()
+                        .expect("a song should have been playing by now")
+                        .song_path,
+                ));
+                self.update_song_label_local(LocalTrackUpdateType::LastPlayed(SongPath(
+                    self.playing_song
+                        .clone()
+                        .expect("a song should have been playing by now")
+                        .song_path,
+                )));
+
+                self.play_start = Some(Instant::now());
+                self.elapsed_before_paused = Duration::from_secs(0);
                 self.update_song_art_cache();
             }
             Ok(MusicStreamEvent::PlaybackEvent(_, _)) => unimplemented!(),
@@ -171,207 +210,158 @@ impl App {
 
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match self.mode {
-            VimMode::Normal => {
-                match key_event.code {
-                    KeyCode::Char('q') => self.exit(),
-                    KeyCode::Char('j') => self.increment_counter(),
-                    KeyCode::Char('k') => self.decrement_counter(),
-                    KeyCode::Char('h') => self.prev_song(),
-                    KeyCode::Char('l') => self.next_song(),
-                    KeyCode::Char('/') => {
-                        self.mode = VimMode::Search;
-                        self.viewer = Page::Search;
-                    }
-                    KeyCode::Char(':') => self.mode = VimMode::Command,
-                    KeyCode::Char('V') => {
-                        self.mode = VimMode::VisualLine;
-                        self.vline_begin = Some(self.cursor);
-                    }
-                    KeyCode::Char('m') => {
-                        self.mode = {
-                            if self.viewer != Page::Albums {
-                                VimMode::Marking
-                            } else {
-                                VimMode::Normal
-                            }
-                        }
-                    }
-                    KeyCode::Char('p') => match self.viewer {
-                        Page::Albums => {
-                            unimplemented!()
-                        }
-                        Page::Songs | Page::Search => {
-                            if self.page_songs.is_empty() {
-                                self.page_songs = self.yank_buff.clone();
-                                return;
-                            }
-
-                            self.page_songs
-                                .splice(self.cursor + 1..self.cursor + 1, self.yank_buff.clone());
-                        }
-                    },
-                    KeyCode::Char('g') => {
-                        let timeout = Duration::from_millis(300);
-                        if self.last_key == 'g' && self.key_pressed_time.elapsed() < timeout {
-                            self.cursor = 0;
-                            self.last_key = ' ';
+            VimMode::Normal => match key_event.code {
+                KeyCode::Char('q') => self.exit(),
+                KeyCode::Char('j') => self.increment_counter(),
+                KeyCode::Char('k') => self.decrement_counter(),
+                KeyCode::Char('h') => self.prev_song(),
+                KeyCode::Char('l') => self.next_song(),
+                KeyCode::Char('/') => {
+                    self.mode = VimMode::Search;
+                    self.viewer = Page::Search;
+                }
+                KeyCode::Char(':') => self.mode = VimMode::Command,
+                KeyCode::Char('V') => {
+                    self.mode = VimMode::VisualLine;
+                    self.vline_begin = Some(self.cursor);
+                }
+                KeyCode::Char('m') => {
+                    self.mode = {
+                        if self.viewer != Page::Albums {
+                            VimMode::Marking
                         } else {
-                            self.last_key = 'g';
-                            self.key_pressed_time = Instant::now();
+                            VimMode::Normal
                         }
                     }
-                    KeyCode::Char('y') => {
-                        let timeout = Duration::from_millis(300);
-                        if self.last_key == 'y' && self.key_pressed_time.elapsed() < timeout {
-                            match self.viewer {
-                                Page::Search | Page::Songs => {
-                                    self.yank_buff = vec![self.page_songs[self.cursor].clone()];
-                                }
-                                Page::Albums => {
-                                    self.yank_buff = self.albums[self.cursor].songs.clone();
-                                }
-                            }
-                            self.last_key = ' ';
-                        } else {
-                            self.last_key = 'y';
-                            self.key_pressed_time = Instant::now();
-                        }
+                }
+                KeyCode::Char('p') => match self.viewer {
+                    Page::Albums => {
+                        unimplemented!()
                     }
-                    KeyCode::Char('d') => {
-                        let timeout = Duration::from_millis(300);
-                        if self.last_key == 'd'
-                            && self.key_pressed_time.elapsed() < timeout
-                            && !self.page_songs.is_empty()
-                        {
-                            match self.viewer {
-                                Page::Search | Page::Songs => {
-                                    self.yank_buff = vec![self.page_songs[self.cursor].clone()];
-                                    self.page_songs.remove(self.cursor);
-                                }
-                                Page::Albums => {
-                                    self.yank_buff = self.albums[self.cursor].songs.clone();
-                                    self.albums.remove(self.cursor);
-                                }
-                            }
-
-                            self.decrement_counter();
-                            self.last_key = ' ';
-                        } else {
-                            self.last_key = 'd';
-                            self.key_pressed_time = Instant::now();
-                        }
-                    }
-                    KeyCode::Char('G') => match self.viewer {
-                        Page::Albums => {
-                            self.cursor = self.albums.len() - 1;
-                        }
-                        Page::Songs | Page::Search => {
-                            self.cursor = self.page_songs.len() - 1;
-                        }
-                    },
-                    KeyCode::Char(' ') => {
-                        let binding = Arc::clone(&self.playback_mode);
-                        let mut state = binding.lock().unwrap();
-                        match *state {
-                            PlaybackMode::NotPlaying => {}
-                            PlaybackMode::Playing => {
-                                *state = PlaybackMode::Paused;
-                                self.sender
-                                    .send(MusicStreamEvent::PlaybackEvent(PlaybackMode::Paused, 0))
-                                    .expect("Could not send through channel");
-                                self.elapsed_before_paused += self.play_start.unwrap().elapsed();
-                                self.play_start = None;
-                            }
-                            PlaybackMode::Paused => {
-                                *state = PlaybackMode::Playing;
-                                self.sender
-                                    .send(MusicStreamEvent::PlaybackEvent(PlaybackMode::Playing, 0))
-                                    .expect("Could not send through channel");
-                                self.play_start = Some(Instant::now());
-                            }
-                        }
-                    }
-                    KeyCode::Esc => {
-                        self.cursor = self.albums_cursor;
-                        self.user_buff.clear();
-                        self.mode = VimMode::Normal;
-                        self.viewer = Page::Albums;
-                        self.album_selected = None;
-                        self.page_songs = self.all_songs.clone();
-                    }
-                    KeyCode::Enter => {
-                        if self.page_songs.is_empty() || self.albums.is_empty() {
+                    Page::Songs | Page::Search => {
+                        if self.page_songs.is_empty() {
+                            self.page_songs = self.yank_buff.clone();
                             return;
                         }
 
+                        self.page_songs
+                            .splice(self.cursor + 1..self.cursor + 1, self.yank_buff.clone());
+                    }
+                },
+                KeyCode::Char('g') => {
+                    let timeout = Duration::from_millis(300);
+                    if self.last_key == 'g' && self.key_pressed_time.elapsed() < timeout {
+                        self.cursor = 0;
+                        self.albums_cursor = self.cursor;
+                        self.last_key = ' ';
+                    } else {
+                        self.last_key = 'g';
+                        self.key_pressed_time = Instant::now();
+                    }
+                }
+                KeyCode::Char('y') => {
+                    let timeout = Duration::from_millis(300);
+                    if self.last_key == 'y' && self.key_pressed_time.elapsed() < timeout {
                         match self.viewer {
-                            Page::Albums => {
-                                self.album_selected = Some(self.albums[self.cursor].clone());
-                                self.viewer = Page::Songs;
-                                self.page_songs =
-                                    self.album_selected.as_ref().unwrap().songs.clone();
-                                self.cursor = 0;
+                            Page::Search | Page::Songs => {
+                                self.yank_buff = vec![self.page_songs[self.cursor].clone()];
                             }
-                            _ => {
-                                // user chose a song
-                                if let Some(prev_song) = self.playing_song.clone() {
-                                    // add elapsed song time into db for the track
-                                    // if a new song is selected
-                                    let dur_played = self.get_time_elapsed().as_secs_f64() as u64;
-                                    self.update_song_label_local(
-                                        LocalTrackUpdateType::DurationPlayed(
-                                            SongPath(prev_song.song_path.clone()),
-                                            dur_played,
-                                        ),
-                                    );
-                                    self.update_db(DbUpdate::DurationPlayed(
-                                        prev_song.song_path.clone(),
-                                        dur_played,
-                                    ));
-                                }
-
-                                self.playing_song_idx = Some(self.cursor);
-                                self.song_queue = Some(self.page_songs.clone());
-
-                                self.playing_song = Some(
-                                    self.song_queue.as_ref().unwrap()
-                                        [self.playing_song_idx.unwrap()]
-                                    .clone(),
-                                );
-                                self.sender
-                                    .send(MusicStreamEvent::NewPlaylistEvent(
-                                        self.song_queue.as_ref().unwrap().clone(),
-                                        self.cursor,
-                                    ))
-                                    .expect("Could not send through channel");
-
-                                let binding = Arc::clone(&self.playback_mode);
-                                let mut state = binding.lock().unwrap();
-                                *state = PlaybackMode::Playing;
-
-                                self.update_db(DbUpdate::LastPlayed(
-                                    self.playing_song
-                                        .clone()
-                                        .expect("a song should have been playing by now")
-                                        .song_path,
-                                ));
-                                self.update_song_label_local(LocalTrackUpdateType::LastPlayed(
-                                    SongPath(
-                                        self.playing_song
-                                            .clone()
-                                            .expect("a song should have been playing by now")
-                                            .song_path,
-                                    ),
-                                ));
-
-                                self.play_start = Some(Instant::now());
-                                self.elapsed_before_paused = Duration::from_secs(0);
+                            Page::Albums => {
+                                self.yank_buff = self.albums[self.cursor].songs.clone();
                             }
                         }
+                        self.last_key = ' ';
+                    } else {
+                        self.last_key = 'y';
+                        self.key_pressed_time = Instant::now();
                     }
-                    _ => {}
                 }
-            }
+                KeyCode::Char('d') => {
+                    let timeout = Duration::from_millis(300);
+                    if self.last_key == 'd'
+                        && self.key_pressed_time.elapsed() < timeout
+                        && !self.page_songs.is_empty()
+                    {
+                        match self.viewer {
+                            Page::Search | Page::Songs => {
+                                self.yank_buff = vec![self.page_songs[self.cursor].clone()];
+                                self.page_songs.remove(self.cursor);
+                            }
+                            Page::Albums => {
+                                self.yank_buff = self.albums[self.cursor].songs.clone();
+                                self.albums.remove(self.cursor);
+                            }
+                        }
+
+                        self.decrement_counter();
+                        self.last_key = ' ';
+                    } else {
+                        self.last_key = 'd';
+                        self.key_pressed_time = Instant::now();
+                    }
+                }
+                KeyCode::Char('G') => match self.viewer {
+                    Page::Albums => {
+                        self.cursor = self.albums.len() - 1;
+                        self.albums_cursor = self.cursor;
+                    }
+                    Page::Songs | Page::Search => {
+                        self.cursor = self.page_songs.len() - 1;
+                    }
+                },
+                KeyCode::Char(' ') => {
+                    let binding = Arc::clone(&self.playback_mode);
+                    let mut state = binding.lock().unwrap();
+                    match *state {
+                        PlaybackMode::NotPlaying => {}
+                        PlaybackMode::Playing => {
+                            *state = PlaybackMode::Paused;
+                            self.playback_sender
+                                .send(MusicStreamEvent::PlaybackEvent(PlaybackMode::Paused, 0))
+                                .expect("Could not send through channel");
+                            self.elapsed_before_paused += self.play_start.unwrap().elapsed();
+                            self.play_start = None;
+                        }
+                        PlaybackMode::Paused => {
+                            *state = PlaybackMode::Playing;
+                            self.playback_sender
+                                .send(MusicStreamEvent::PlaybackEvent(PlaybackMode::Playing, 0))
+                                .expect("Could not send through channel");
+                            self.play_start = Some(Instant::now());
+                        }
+                    }
+                }
+                KeyCode::Esc => {
+                    self.cursor = self.albums_cursor;
+                    self.user_buff.clear();
+                    self.viewer = Page::Albums;
+                    self.album_selected = None;
+                }
+                KeyCode::Enter => {
+                    if self.page_songs.is_empty() || self.albums.is_empty() {
+                        return;
+                    }
+
+                    match self.viewer {
+                        Page::Albums => {
+                            self.album_selected = Some(self.albums[self.cursor].clone());
+                            self.viewer = Page::Songs;
+                            self.page_songs = self.album_selected.as_ref().unwrap().songs.clone();
+                            self.cursor = 0;
+                        }
+                        Page::Songs | Page::Search => {
+                            // the user picked a song
+                            self.playback_sender
+                                .send(MusicStreamEvent::NewPlaylistEvent(
+                                    self.page_songs.clone(),
+                                    self.cursor,
+                                ))
+                                .expect("Could not send through channel");
+                        }
+                    }
+                }
+                _ => {}
+            },
             VimMode::Search => match key_event.code {
                 KeyCode::Char(c) => {
                     self.user_buff.push(c);
@@ -640,7 +630,7 @@ impl App {
 
         self.playing_song = next_song;
 
-        self.sender
+        self.playback_sender
             .send(MusicStreamEvent::NewPlaylistEvent(
                 self.song_queue.clone().unwrap(),
                 self.playing_song_idx.unwrap(),
@@ -666,7 +656,7 @@ impl App {
 
         self.playing_song = prev_song;
 
-        self.sender
+        self.playback_sender
             .send(MusicStreamEvent::NewPlaylistEvent(
                 self.song_queue.clone().unwrap(),
                 self.playing_song_idx.unwrap(),
@@ -818,8 +808,8 @@ impl App {
 
     fn playback(&mut self) {
         let (track_sender, track_receiver) = channel::<MusicStreamEvent>();
-        self.playback_event_receiver = Some(track_receiver);
-        let Some(receiver) = self.receiver.take() else {
+        self.event_receiver = Some(track_receiver);
+        let Some(receiver) = self.playback_receiver.take() else {
             return;
         };
 
@@ -863,8 +853,8 @@ impl App {
                         Ok(MusicStreamEvent::NewPlaylistEvent(new_playlist, new_idx)) => {
                             track_sender
                                 .send(MusicStreamEvent::NewPlaylistEvent(
-                                    playlist.clone(),
-                                    track_no,
+                                    new_playlist.clone(),
+                                    new_idx,
                                 ))
                                 .ok();
 
