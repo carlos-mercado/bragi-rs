@@ -25,6 +25,8 @@ use crate::types::{
 use music::{Album, TrackDetails, build_albums, filter_tracks, get_music_files};
 use music::{db::*, get_song_art};
 
+pub type AlbumArtInfo = (Vec<u8>, u64, RefCell<StatefulProtocol>);
+
 pub struct App {
     pub exit: bool,
     pub cursor: usize,
@@ -58,7 +60,7 @@ pub struct App {
     pub vline_begin: Option<usize>,
     pub image_picker: Picker,
     // bytes, hash, protocol
-    pub cover_art: Option<(Vec<u8>, u64, RefCell<StatefulProtocol>)>,
+    pub cover_art: Option<AlbumArtInfo>,
 }
 
 impl App {
