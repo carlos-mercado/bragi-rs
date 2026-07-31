@@ -4,7 +4,7 @@ use crate::types::{PlaybackMode, VimMode};
 use ratatui::prelude::Text;
 use ratatui::{
     buffer::Buffer,
-    layout::{Constraint, Layout, Margin, Rect},
+    layout::{Constraint, Layout, Margin, Rect, Size},
     style::{Color, Style},
     symbols,
     widgets::{Block, LineGauge, List, ListItem, ListState, Paragraph, StatefulWidget, Widget},
@@ -17,15 +17,17 @@ impl Widget for &App {
         let [selection_area, lower_area] =
             Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(area);
 
-        let [info_area, album_art_area, progress_bar_area] = Layout::vertical([
-            Constraint::Percentage(10),
-            Constraint::Percentage(80),
-            Constraint::Percentage(10),
-        ])
-        .areas(lower_area);
+        let [top_area, progress_bar_area] =
+            Layout::vertical([Constraint::Percentage(90), Constraint::Percentage(10)])
+                .areas(lower_area);
 
         let mut selection_state = ListState::default().with_selected(Some(self.cursor));
         let music_preview = Block::bordered().title_top("Now Playing");
+        let inner_top_area = music_preview.inner(top_area);
+        let [info_area, album_art_area] =
+            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .areas(inner_top_area);
+
         let binding = Arc::clone(&self.playback_mode);
         let state = binding.lock().unwrap();
 
@@ -33,21 +35,42 @@ impl Widget for &App {
         if let Some(selected_track) = &self.playing_song
             && (*state == PlaybackMode::Playing || *state == PlaybackMode::Paused)
         {
-            Paragraph::new(Text::from(selected_track))
-                .centered()
-                .block(music_preview)
-                .render(info_area, buf);
+            music_preview.render(top_area, buf);
 
-            if let Some((_bytes, _hash, protocol)) = &self.cover_art {
-                let [_left, centered, _right] = Layout::horizontal([
-                    Constraint::Percentage(40),
-                    Constraint::Percentage(20),
-                    Constraint::Percentage(40),
-                ])
-                .areas(album_art_area);
+            let info_text = Text::from(selected_track.clone());
+            let text_height = info_text.lines.len() as u16;
+            let info_paragraph = Paragraph::new(info_text).centered();
+            let [_top, centered_info, _bottom] = Layout::vertical([
+                Constraint::Fill(1),
+                Constraint::Length(text_height),
+                Constraint::Fill(1),
+            ])
+            .areas(info_area);
+            info_paragraph.render(centered_info, buf);
 
-                let image_widget = StatefulImage::default().resize(Resize::Fit(None));
-                StatefulWidget::render(image_widget, centered, buf, &mut *protocol.borrow_mut());
+            if let Some((_bytes, protocol)) = &*self.cover_art.lock().unwrap() {
+                let resize = Resize::Fit(None);
+                let rendered_size = protocol.read().unwrap().size_for(
+                    resize.clone(),
+                    Size::new(album_art_area.width, album_art_area.height),
+                );
+
+                let centered = Rect {
+                    x: album_art_area.x
+                        + album_art_area.width.saturating_sub(rendered_size.width) / 2,
+                    y: album_art_area.y
+                        + album_art_area.height.saturating_sub(rendered_size.height) / 2,
+                    width: rendered_size.width.min(album_art_area.width),
+                    height: rendered_size.height.min(album_art_area.height),
+                };
+
+                let image_widget = StatefulImage::default().resize(resize);
+                StatefulWidget::render(
+                    image_widget,
+                    centered,
+                    buf,
+                    &mut *protocol.write().unwrap(),
+                );
             };
         }
         std::mem::drop(state);

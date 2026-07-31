@@ -1,31 +1,31 @@
-use std::cell::RefCell;
-use std::cmp::Reverse;
-use std::fs::File;
-use std::hash::{DefaultHasher, Hash, Hasher};
-use std::io;
-use std::io::BufReader;
-use std::path::Path;
-use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::{Duration, Instant};
-use std::time::{SystemTime, UNIX_EPOCH};
-
+use crate::config::config_init;
+use crate::types::{
+    DbUpdate, Label, LocalTrackUpdateType, MusicStreamEvent, Page, PlaybackMode, SongPath, VimMode,
+};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
+use lru::LruCache;
+use music::{Album, TrackDetails, build_albums, filter_tracks, get_music_files};
+use music::{db::*, get_song_art};
 use ratatui::DefaultTerminal;
 use ratatui::Frame;
 use ratatui_image::picker::Picker;
 use ratatui_image::protocol::StatefulProtocol;
 use redb::Database;
+use std::cmp::Reverse;
+use std::fs::File;
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::io;
+use std::io::BufReader;
+use std::num::NonZeroUsize;
+use std::path::Path;
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
+use std::sync::{Arc, Mutex, RwLock};
+use std::thread;
+use std::time::{Duration, Instant};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::config::config_init;
-use crate::types::{
-    DbUpdate, Label, LocalTrackUpdateType, MusicStreamEvent, Page, PlaybackMode, SongPath, VimMode,
-};
-use music::{Album, TrackDetails, build_albums, filter_tracks, get_music_files};
-use music::{db::*, get_song_art};
-
-pub type AlbumArtInfo = (Vec<u8>, u64, RefCell<StatefulProtocol>);
+// (bytes, protocol)
+pub type AlbumArtInfo = (Vec<u8>, Arc<RwLock<StatefulProtocol>>);
 
 pub struct App {
     pub exit: bool,
@@ -59,8 +59,10 @@ pub struct App {
     pub yank_buff: Vec<TrackDetails>,
     pub vline_begin: Option<usize>,
     pub image_picker: Picker,
-    // bytes, hash, protocol
-    pub cover_art: Option<AlbumArtInfo>,
+
+    pub cover_art: Arc<Mutex<Option<AlbumArtInfo>>>,
+    // Album => (art_bytes, hash)
+    pub cache: Arc<Mutex<LruCache<Album, AlbumArtInfo>>>,
 }
 
 impl App {
@@ -80,6 +82,8 @@ impl App {
         let elapsed_before_paused = Duration::from_secs(0);
         let playback_mode = Arc::new(Mutex::new(PlaybackMode::NotPlaying));
         let image_picker = Picker::from_query_stdio().expect("Could not create image picker");
+        let cover_art = Arc::new(Mutex::new(None));
+        let cache = Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(10).unwrap())));
 
         let mut app = App {
             cursor: 0,
@@ -108,7 +112,8 @@ impl App {
             yank_buff: Vec::new(),
             albums_cursor: 0,
             image_picker,
-            cover_art: None,
+            cover_art,
+            cache,
         };
 
         app.playback();
@@ -151,7 +156,7 @@ impl App {
                     SongPath(prev_song.song_path),
                     prev_song.duration,
                 ));
-                self.update_song_art_cache();
+                self.update_curr_song_art();
             }
             Ok(MusicStreamEvent::NewPlaylistEvent(queue, i)) => {
                 // user chose a song
@@ -193,7 +198,7 @@ impl App {
 
                 self.play_start = Some(Instant::now());
                 self.elapsed_before_paused = Duration::from_secs(0);
-                self.update_song_art_cache();
+                self.update_curr_song_art();
             }
             Ok(MusicStreamEvent::PlaybackEvent(_, _)) => unimplemented!(),
             Err(_) => {}
@@ -350,6 +355,7 @@ impl App {
                             self.viewer = Page::Songs;
                             self.page_songs = self.album_selected.as_ref().unwrap().songs.clone();
                             self.cursor = 0;
+                            self.preload(self.album_selected.clone().unwrap());
                         }
                         Page::Songs | Page::Search => {
                             // the user picked a song
@@ -541,7 +547,6 @@ impl App {
                 KeyCode::Esc => {
                     self.user_buff.clear();
                     self.mode = VimMode::Normal;
-                    self.viewer = Page::Albums;
                 }
                 _ => {}
             },
@@ -909,34 +914,91 @@ impl App {
         });
     }
 
-    pub fn hash_art(&self, song: &Vec<u8>) -> u64 {
+    fn _hash_art(&self, song: &Vec<u8>) -> u64 {
         let mut s = DefaultHasher::new();
         song.hash(&mut s);
         s.finish()
     }
 
-    fn update_song_art_cache(&mut self) {
-        // if the cover art for the new track is different, update it.
-        // other wise, don't worry about it
+    fn preload(&mut self, album: Album) {
+        let picker = self.image_picker.clone();
+        let cache_handle = Arc::clone(&self.cache);
+
+        let _handle = thread::spawn(move || {
+            if album.songs.is_empty() || cache_handle.lock().unwrap().contains(&album) {
+                return;
+            }
+            let Some(new_song_art) = get_song_art(&album.songs[0]) else {
+                return;
+            };
+
+            if let Ok(img) = image::load_from_memory(&new_song_art) {
+                let protocol = picker.new_resize_protocol(img);
+                let rc_ptr = Arc::new(RwLock::new(protocol));
+                cache_handle
+                    .lock()
+                    .unwrap()
+                    .put(album, (new_song_art, rc_ptr.clone()));
+            }
+        });
+    }
+
+    fn update_curr_song_art(&mut self) {
+        let possible_curr_album = self.album_selected.clone();
+        let picker = self.image_picker.clone();
+        let playing_song = self.playing_song.clone();
+        let cover_art_handle = Arc::clone(&self.cover_art);
+        let cache_handle = Arc::clone(&self.cache);
+        thread::spawn(move || {
+            // before we try to find the song art, is it in the cache?
+            if possible_curr_album.is_some()
+                && let Some((bytes, protocol)) = cache_handle
+                    .lock()
+                    .unwrap()
+                    .get(possible_curr_album.as_ref().unwrap())
+            {
+                // it's in the cache
+                *cover_art_handle.lock().unwrap() = Some((bytes.clone(), (*protocol).clone()));
+                return;
+            }
+
+            // couldn't find the art in the cache
+            let Some(new_song_art) = get_song_art(playing_song.as_ref().unwrap()) else {
+                return;
+            };
+            if let Ok(img) = image::load_from_memory(&new_song_art) {
+                let protocol = picker.new_resize_protocol(img);
+                let rc_ptr = Arc::new(RwLock::new(protocol));
+                *cover_art_handle.lock().unwrap() = Some((new_song_art.clone(), rc_ptr.clone()));
+                if let Some(album) = possible_curr_album.clone() {
+                    cache_handle
+                        .lock()
+                        .unwrap()
+                        .put(album, (new_song_art, rc_ptr.clone()));
+                }
+            }
+        });
+
+        /* // before we try to find the song art, is it in the cache?
+        if self.album_selected.is_some()
+            && let Some((bytes, protocol)) = self.cache.get(self.album_selected.as_ref().unwrap())
+        {
+            // it's in the cache
+            self.cover_art = Some((bytes.clone(), (*protocol).clone()));
+            return;
+        }
+
+        // couldn't find the art in the cache
         let Some(new_song_art) = get_song_art(self.playing_song.as_ref().unwrap()) else {
             return;
         };
-        let new_song_hash = self.hash_art(&new_song_art);
-        match &self.cover_art {
-            Some((_, old_hash, _)) => {
-                if old_hash != &new_song_hash
-                    && let Ok(img) = image::load_from_memory(&new_song_art)
-                {
-                    let protocol = self.image_picker.new_resize_protocol(img);
-                    self.cover_art = Some((new_song_art, new_song_hash, RefCell::new(protocol)))
-                }
+        if let Ok(img) = image::load_from_memory(&new_song_art) {
+            let protocol = self.image_picker.new_resize_protocol(img);
+            let rc_ptr = Rc::new(RefCell::new(protocol));
+            self.cover_art = Some((new_song_art.clone(), rc_ptr.clone()));
+            if let Some(album) = self.album_selected.clone() {
+                self.cache.put(album, (new_song_art, rc_ptr.clone()));
             }
-            None => {
-                if let Ok(img) = image::load_from_memory(&new_song_art) {
-                    let protocol = self.image_picker.new_resize_protocol(img);
-                    self.cover_art = Some((new_song_art, new_song_hash, RefCell::new(protocol)))
-                };
-            }
-        }
+        } */
     }
 }

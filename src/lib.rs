@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub mod db;
 use crate::db::*;
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Album {
     pub artist: String,
     pub album: String,
@@ -49,8 +49,8 @@ impl From<&Album> for Text<'static> {
 impl From<TrackDetails> for Text<'static> {
     fn from(track: TrackDetails) -> Self {
         Text::from(format!(
-            "{}\n{}\n{} [Track {}] {:?}",
-            track.artist, track.title, track.album, track.track_no, track.tags
+            "{}\n{}\n{}\n[Track {}]",
+            track.artist, track.title, track.album, track.track_no
         ))
     }
 }

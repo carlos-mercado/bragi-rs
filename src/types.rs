@@ -54,3 +54,8 @@ pub enum LocalTrackUpdateType {
     AddLabel(SongPath, Label),
     WipeLabels(SongPath),
 }
+
+/*pub enum Item {
+    Album(Album),
+    Track(TrackDetails),
+}*/

@@ -1,4 +1,3 @@
-use dirs;
 use serde::Deserialize;
 
 #[derive(Deserialize, Debug)]
