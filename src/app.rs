@@ -224,6 +224,7 @@ impl App {
                 KeyCode::Char('h') => self.prev_song(),
                 KeyCode::Char('l') => self.next_song(),
                 KeyCode::Char('/') => {
+                    self.page_songs = self.all_songs.clone();
                     self.mode = VimMode::Search;
                     self.viewer = Page::Search;
                 }
@@ -978,27 +979,5 @@ impl App {
                 }
             }
         });
-
-        /* // before we try to find the song art, is it in the cache?
-        if self.album_selected.is_some()
-            && let Some((bytes, protocol)) = self.cache.get(self.album_selected.as_ref().unwrap())
-        {
-            // it's in the cache
-            self.cover_art = Some((bytes.clone(), (*protocol).clone()));
-            return;
-        }
-
-        // couldn't find the art in the cache
-        let Some(new_song_art) = get_song_art(self.playing_song.as_ref().unwrap()) else {
-            return;
-        };
-        if let Ok(img) = image::load_from_memory(&new_song_art) {
-            let protocol = self.image_picker.new_resize_protocol(img);
-            let rc_ptr = Rc::new(RefCell::new(protocol));
-            self.cover_art = Some((new_song_art.clone(), rc_ptr.clone()));
-            if let Some(album) = self.album_selected.clone() {
-                self.cache.put(album, (new_song_art, rc_ptr.clone()));
-            }
-        } */
     }
 }
