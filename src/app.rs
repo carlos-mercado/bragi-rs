@@ -1,10 +1,10 @@
-use crate::config::config_init;
 use crate::types::{
     DbUpdate, Label, LocalTrackUpdateType, MusicStreamEvent, Page, PlaybackMode, SongPath, VimMode,
 };
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use lru::LruCache;
-use music::{Album, TrackDetails, build_albums, filter_tracks, get_music_files};
+use music::config::config_init;
+use music::{Album, TrackDetails, filter_tracks, init};
 use music::{db::*, get_song_art};
 use ratatui::DefaultTerminal;
 use ratatui::Frame;
@@ -17,7 +17,6 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io;
 use std::io::BufReader;
 use std::num::NonZeroUsize;
-use std::path::Path;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
@@ -69,12 +68,11 @@ impl App {
     pub fn new() -> App {
         let config = config_init();
         let db = db_setup();
-
-        let mut songs_vec: Vec<TrackDetails> = vec![];
-        get_music_files(Path::new(&config.music_path), &mut songs_vec, db.as_ref()).unwrap();
+        let (mut albums, mut songs_vec) = init(config, db_setup());
         songs_vec.sort();
+        albums.sort();
+
         let songs_vec_clone = songs_vec.clone();
-        let albums = build_albums(&songs_vec_clone);
         let audio_handle = rodio::DeviceSinkBuilder::open_default_sink()
             .expect("Could not find default audio stream");
         let (playback_sender, receiver) = channel();

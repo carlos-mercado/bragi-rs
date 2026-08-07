@@ -28,7 +28,7 @@ pub fn db_setup() -> Option<Database> {
 // if an song_path already exsits in the table read, adn return
 // otherwise create a new entry with default values,
 pub fn read_or_insert(possible_db: Option<&Database>, query: &str) -> Option<(u64, u64, u64)> {
-    let db = possible_db?;
+    let db = possible_db.as_ref()?;
 
     {
         let read_tx = db.begin_read().ok()?;

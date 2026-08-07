@@ -21,4 +21,3 @@
 
 ### Disclaimers
 - Very early in development.
-- No `ALAC` support.

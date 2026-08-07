@@ -8,9 +8,12 @@ use std::fs::{self, DirEntry};
 use std::hash::Hash;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::Receiver;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub mod config;
 pub mod db;
+use crate::config::Config;
 use crate::db::*;
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -23,7 +26,7 @@ pub struct Album {
     pub stats: (u64, u64, u64),
 }
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Hash, Default)]
 pub struct TrackDetails {
     pub artist: String,
     pub album: String,
@@ -64,49 +67,50 @@ impl From<&TrackDetails> for Text<'static> {
     }
 }
 
-// for all tracks in a library, put all songs that belong in the same
-// album, in the same album, and collect those albums into one
-// vector and return
-pub fn build_albums(tracks: &Vec<TrackDetails>) -> Vec<Album> {
-    // (artist, album) => album_stats
-    let mut album_to_stats: HashMap<(&String, &String), (u64, u64, u64)> = HashMap::new();
+pub fn builder(song_listener: Receiver<TrackDetails>) {
+    let mut albums_hashmap: HashMap<(String, String), Album> = HashMap::new();
+    if let Ok(track) = song_listener.try_recv() {
+        let artist = track.artist.clone();
+        let album_title = track.album.clone();
+        let date = track.date.clone();
 
-    // (artist, album) => album_songs
-    let mut album_to_songs: HashMap<(&String, &String), Vec<TrackDetails>> = HashMap::new();
+        albums_hashmap
+            .entry((artist.clone(), album_title.clone()))
+            .or_insert(Album {
+                artist,
+                album: album_title,
+                date,
+                selected: false,
+                songs: Vec::new(),
+                stats: track.stats,
+            })
+            .songs
+            .push(track);
+    };
+}
 
-    for track in tracks {
-        album_to_songs
-            .entry((&track.artist, &track.album))
-            .or_default()
-            .push(track.clone());
+pub fn init(config: Config, db: Option<Database>) -> (Vec<Album>, Vec<TrackDetails>) {
+    let mut albums_hashmap: HashMap<(String, String), Album> = HashMap::new();
+    find_music_files(
+        Path::new(&config.music_path),
+        &mut albums_hashmap,
+        db.as_ref(),
+    )
+    .unwrap();
 
-        let album_stats = album_to_stats
-            .entry((&track.artist, &track.album))
-            .or_insert((0, 0, 0));
+    let (albums, songs_vec) = build_albums(albums_hashmap);
+    (albums, songs_vec)
+}
 
-        let last_played = std::cmp::max(album_stats.0, track.stats.0);
-        let duration_played = album_stats.1 + track.stats.1;
-        let date_added = std::cmp::max(album_stats.2, track.stats.2);
-        *album_stats = (last_played, duration_played, date_added);
-    }
-
-    let mut albums = Vec::new();
-    for ((artist, album), mut songs) in album_to_songs {
-        songs.sort();
-        albums.push(Album {
-            artist: artist.to_string(),
-            album: album.to_string(),
-            date: songs
-                .first()
-                .map_or("Unknown Date".to_string(), |d| d.date.clone()),
-            selected: false,
-            stats: album_to_stats[&(artist, album)],
-            songs,
-        });
-    }
-
-    albums.sort();
-    albums
+// after going through all the albums that have been built
+// put all albums and songs in their own vectors
+pub fn build_albums(
+    mut album_to_songs: HashMap<(String, String), Album>,
+) -> (Vec<Album>, Vec<TrackDetails>) {
+    album_to_songs.values_mut().for_each(|a| a.songs.sort());
+    let albums: Vec<Album> = album_to_songs.values().cloned().collect();
+    let all_songs: Vec<TrackDetails> = album_to_songs.into_values().flat_map(|a| a.songs).collect();
+    (albums, all_songs)
 }
 
 // Filter a list of tracks by a query string.
@@ -134,9 +138,9 @@ pub fn filter_tracks(tracks: &[TrackDetails], query: &str) -> Vec<TrackDetails> 
 
 // dfs through all directories in music library
 // and extract all music files
-pub fn get_music_files(
+pub fn find_music_files(
     path: &Path,
-    songs: &mut Vec<TrackDetails>,
+    album_to_songs: &mut HashMap<(String, String), Album>,
     db: Option<&Database>,
 ) -> io::Result<()> {
     let it: fs::ReadDir = fs::read_dir(path)?;
@@ -145,18 +149,36 @@ pub fn get_music_files(
         let entry: DirEntry = entry?;
 
         if entry.metadata()?.is_dir() {
-            get_music_files(&entry.path(), songs, db)?;
+            find_music_files(&entry.path(), album_to_songs, db)?;
         } else {
             let path: PathBuf = entry.path();
-            let file_type = path.extension().and_then(|e| e.to_str()).unwrap();
+            let file_type = path.extension().and_then(|e| e.to_str());
 
-            let is_audio = matches!(
-                file_type.to_lowercase().as_str(),
-                "mp3" | "flac" | "wav" | "aac" | "ogg" | "m4a" | "aiff"
-            );
+            let mut is_audio = false;
 
-            if is_audio && let Ok(ans) = get_audio_metadata(&path, db) {
-                songs.push(ans);
+            if let Some(file_type) = file_type {
+                is_audio = matches!(
+                    file_type.to_lowercase().as_str(),
+                    "mp3" | "flac" | "wav" | "aac" | "ogg" | "m4a" | "aiff"
+                );
+            }
+
+            if is_audio && let Ok(track) = get_audio_metadata(&path, db) {
+                let artist_name = track.artist.clone();
+                let album_name = track.album.clone();
+
+                album_to_songs
+                    .entry((artist_name.clone(), album_name.clone()))
+                    .or_insert(Album {
+                        artist: artist_name,
+                        album: album_name,
+                        date: track.date.clone(),
+                        selected: false,
+                        songs: Vec::new(),
+                        stats: track.stats,
+                    })
+                    .songs
+                    .push(track);
             }
         }
     }
@@ -171,7 +193,10 @@ fn get_audio_metadata(
     db: Option<&Database>,
 ) -> Result<TrackDetails, Box<dyn std::error::Error>> {
     let tagged_file: TaggedFile = read_from_path(path)?;
-    let tag = tagged_file.primary_tag().unwrap();
+    let Some(tag) = tagged_file.primary_tag() else {
+        return Ok(TrackDetails::default());
+    };
+
     let title = tag.title().unwrap_or("Unknown Title".into()).to_string();
     let artist = tag.artist().unwrap_or("Unknown Artist".into()).to_string();
     let album = tag.album().unwrap_or("Unknown Album".into()).to_string();
