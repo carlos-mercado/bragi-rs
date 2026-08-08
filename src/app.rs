@@ -4,8 +4,8 @@ use crate::types::{
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use lru::LruCache;
 use music::config::config_init;
-use music::{Album, TrackDetails, filter_tracks, init};
-use music::{db::*, get_song_art};
+use music::{Album, TrackDetails, filter_tracks};
+use music::{builder, db::*, divide_and_conquer, get_song_art};
 use ratatui::DefaultTerminal;
 use ratatui::Frame;
 use ratatui_image::picker::Picker;
@@ -17,6 +17,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io;
 use std::io::BufReader;
 use std::num::NonZeroUsize;
+use std::path::Path;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
@@ -54,7 +55,7 @@ pub struct App {
     pub last_key: char,
     pub key_pressed_time: Instant,
     pub event_receiver: Option<Receiver<MusicStreamEvent>>,
-    pub db: Option<Database>,
+    pub db: Option<Arc<Database>>,
     pub yank_buff: Vec<TrackDetails>,
     pub vline_begin: Option<usize>,
     pub image_picker: Picker,
@@ -68,7 +69,16 @@ impl App {
     pub fn new() -> App {
         let config = config_init();
         let db = db_setup();
-        let (mut albums, mut songs_vec) = init(config, db_setup());
+        let fixed_db = db.map(Arc::new);
+        let (init_sender, init_receiver) = channel();
+        let builder_handle = thread::spawn(move || builder(init_receiver));
+        let _resolved = divide_and_conquer(
+            fixed_db.clone(),
+            Arc::new(init_sender.clone()),
+            Path::new(&config.music_path),
+        );
+        drop(init_sender);
+        let (mut albums, mut songs_vec) = builder_handle.join().unwrap();
         songs_vec.sort();
         albums.sort();
 
@@ -103,7 +113,7 @@ impl App {
             last_key: ' ',
             key_pressed_time: Instant::now(),
             event_receiver: None,
-            db,
+            db: fixed_db,
             song_queue: None,
             vline_begin: None,
             viewer: Page::Albums,

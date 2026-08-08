@@ -18,9 +18,9 @@ impl Default for Config {
 }
 
 pub fn config_init() -> Config {
-    let config_path = dirs::home_dir()
-        .expect("Could not find home directory")
-        .join(".config/bragi/conf.toml");
+    let config_path = dirs::config_dir()
+        .expect("Could not find config directory")
+        .join("bragi/conf.toml");
 
     std::fs::read_to_string(&config_path)
         .ok()

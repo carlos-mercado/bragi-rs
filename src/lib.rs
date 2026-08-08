@@ -6,14 +6,14 @@ use std::cmp::Ord;
 use std::collections::HashMap;
 use std::fs::{self, DirEntry};
 use std::hash::Hash;
-use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::Receiver;
+use std::sync::Arc;
+use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::{io, thread};
 
 pub mod config;
 pub mod db;
-use crate::config::Config;
 use crate::db::*;
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -67,50 +67,117 @@ impl From<&TrackDetails> for Text<'static> {
     }
 }
 
-pub fn builder(song_listener: Receiver<TrackDetails>) {
+pub fn builder(song_listener: Receiver<TrackDetails>) -> (Vec<Album>, Vec<TrackDetails>) {
     let mut albums_hashmap: HashMap<(String, String), Album> = HashMap::new();
-    if let Ok(track) = song_listener.try_recv() {
-        let artist = track.artist.clone();
-        let album_title = track.album.clone();
-        let date = track.date.clone();
+    loop {
+        match song_listener.try_recv() {
+            Ok(track) => {
+                let artist = track.artist.clone();
+                let album_title = track.album.clone();
+                let date = track.date.clone();
+                albums_hashmap
+                    .entry((artist.clone(), album_title.clone()))
+                    .or_insert(Album {
+                        artist,
+                        album: album_title,
+                        date,
+                        selected: false,
+                        songs: Vec::new(),
+                        stats: track.stats,
+                    })
+                    .songs
+                    .push(track);
+            }
+            Err(TryRecvError::Disconnected) => break,
+            Err(TryRecvError::Empty) => {}
+        }
+    }
 
-        albums_hashmap
-            .entry((artist.clone(), album_title.clone()))
-            .or_insert(Album {
-                artist,
-                album: album_title,
-                date,
-                selected: false,
-                songs: Vec::new(),
-                stats: track.stats,
-            })
-            .songs
-            .push(track);
-    };
+    let songs: Vec<TrackDetails> = albums_hashmap
+        .values()
+        .flat_map(|a| a.songs.clone())
+        .collect();
+    let albums: Vec<Album> = albums_hashmap
+        .values_mut()
+        .map(|a| {
+            a.songs.sort();
+            a.clone()
+        })
+        .collect();
+    (albums, songs)
 }
 
-pub fn init(config: Config, db: Option<Database>) -> (Vec<Album>, Vec<TrackDetails>) {
-    let mut albums_hashmap: HashMap<(String, String), Album> = HashMap::new();
-    find_music_files(
-        Path::new(&config.music_path),
-        &mut albums_hashmap,
-        db.as_ref(),
-    )
-    .unwrap();
+pub fn divide_and_conquer(
+    db: Option<Arc<Database>>,
+    sender: Arc<Sender<TrackDetails>>,
+    music_path: &Path,
+) -> io::Result<()> {
+    let it: fs::ReadDir = fs::read_dir(music_path)?;
+    let bucket_count = 2;
+    let mut buckets: Vec<Vec<fs::DirEntry>> = (0..bucket_count).map(|_| Vec::new()).collect();
+    for (idx, path) in it.enumerate() {
+        buckets[idx % bucket_count].push(path.unwrap());
+    }
 
-    let (albums, songs_vec) = build_albums(albums_hashmap);
-    (albums, songs_vec)
+    let mut handles = Vec::new();
+    for dir_bucket in buckets {
+        let sender = Arc::clone(&sender);
+        let db = db.clone(); // cheap Arc clone
+        let handle = thread::spawn(move || {
+            for file in dir_bucket {
+                extract_music_from_dir(file, db.as_deref(), sender.clone());
+            }
+        });
+        handles.push(handle);
+    }
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
+    Ok(())
 }
 
-// after going through all the albums that have been built
-// put all albums and songs in their own vectors
-pub fn build_albums(
-    mut album_to_songs: HashMap<(String, String), Album>,
-) -> (Vec<Album>, Vec<TrackDetails>) {
-    album_to_songs.values_mut().for_each(|a| a.songs.sort());
-    let albums: Vec<Album> = album_to_songs.values().cloned().collect();
-    let all_songs: Vec<TrackDetails> = album_to_songs.into_values().flat_map(|a| a.songs).collect();
-    (albums, all_songs)
+// TODO
+// this is recusive dfs with no cycle checks
+// idk if cylces are possible to create in file systems
+// maybe with symlinks, but i don't wan't to deal
+// with that right now
+
+// dfs through all directories in music library
+// and extract all music files
+fn extract_music_from_dir(
+    file: DirEntry,
+    db: Option<&Database>,
+    sender: Arc<Sender<TrackDetails>>,
+) -> Option<u32> {
+    let mut total = 0;
+
+    if file.metadata().ok()?.is_dir() {
+        for child_file in fs::read_dir(file.path()).ok()? {
+            if let Some(t) = extract_music_from_dir(child_file.unwrap(), db, sender.clone()) {
+                total += t;
+            }
+        }
+    } else {
+        let file_path: PathBuf = file.path();
+        let file_type = file_path.extension().and_then(|e| e.to_str());
+        let mut is_audio = false;
+        if let Some(file_type) = file_type {
+            is_audio = matches!(
+                file_type.to_lowercase().as_str(),
+                "mp3" | "flac" | "wav" | "aac" | "ogg" | "m4a" | "aiff"
+            );
+        }
+
+        if is_audio && let Ok(track) = get_audio_metadata(&file_path, db) {
+            sender
+                .send(track)
+                .expect("couldn't send track through tunnel");
+        }
+    }
+
+    Some(total)
 }
 
 // Filter a list of tracks by a query string.
@@ -128,62 +195,6 @@ pub fn filter_tracks(tracks: &[TrackDetails], query: &str) -> Vec<TrackDetails> 
         })
         .cloned()
         .collect()
-}
-
-// TODO
-// this is recusive dfs with no cycle checks
-// idk if cylces are possible to create in file systems
-// maybe with symlinks, but i don't wan't to deal
-// with that right now
-
-// dfs through all directories in music library
-// and extract all music files
-pub fn find_music_files(
-    path: &Path,
-    album_to_songs: &mut HashMap<(String, String), Album>,
-    db: Option<&Database>,
-) -> io::Result<()> {
-    let it: fs::ReadDir = fs::read_dir(path)?;
-
-    for entry in it {
-        let entry: DirEntry = entry?;
-
-        if entry.metadata()?.is_dir() {
-            find_music_files(&entry.path(), album_to_songs, db)?;
-        } else {
-            let path: PathBuf = entry.path();
-            let file_type = path.extension().and_then(|e| e.to_str());
-
-            let mut is_audio = false;
-
-            if let Some(file_type) = file_type {
-                is_audio = matches!(
-                    file_type.to_lowercase().as_str(),
-                    "mp3" | "flac" | "wav" | "aac" | "ogg" | "m4a" | "aiff"
-                );
-            }
-
-            if is_audio && let Ok(track) = get_audio_metadata(&path, db) {
-                let artist_name = track.artist.clone();
-                let album_name = track.album.clone();
-
-                album_to_songs
-                    .entry((artist_name.clone(), album_name.clone()))
-                    .or_insert(Album {
-                        artist: artist_name,
-                        album: album_name,
-                        date: track.date.clone(),
-                        selected: false,
-                        songs: Vec::new(),
-                        stats: track.stats,
-                    })
-                    .songs
-                    .push(track);
-            }
-        }
-    }
-
-    Ok(())
 }
 
 // given a music file get the metadata of the track.
