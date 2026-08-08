@@ -1,38 +1,40 @@
+use crate::TrackMetadata;
 use redb::{Database, Error, MultimapTableDefinition, ReadableDatabase, TableDefinition};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // path => (last_played, duration_played, track_added)
-const TRACK_DETAILS: TableDefinition<&str, (u64, u64, u64)> = TableDefinition::new("tracks.db");
+const TRACK_STATS: TableDefinition<&str, (u64, u64, u64)> = TableDefinition::new("tracks.db");
 
 // song_path => playlist
 const PLAYLISTS: MultimapTableDefinition<&str, &str> = MultimapTableDefinition::new("playlists.db");
 
+// song_path => metadata
+const TRACK_METADATA: TableDefinition<&str, &[u8]> = TableDefinition::new("track_metadata.db");
+
 pub fn db_setup() -> Option<Database> {
-    let db_path: PathBuf = dirs::home_dir()
+    let db_path: PathBuf = dirs::data_dir()
         .expect("could not find home dir")
-        .join(".local/share/bragi/bragi.db");
+        .join("bragi/bragi.db");
 
     let db = Database::create(&db_path).ok()?;
 
     // Create table if it doesn't exist
     let write_tx = db.begin_write().ok()?;
-    write_tx.open_table(TRACK_DETAILS).ok()?;
+    write_tx.open_table(TRACK_STATS).ok()?;
+    write_tx.open_table(TRACK_METADATA).ok()?;
     write_tx.open_multimap_table(PLAYLISTS).ok()?;
     write_tx.commit().ok()?;
-
     Some(db)
 }
 
-// TODO could be async
 // if an song_path already exsits in the table read, adn return
 // otherwise create a new entry with default values,
 pub fn read_or_insert(possible_db: Option<&Database>, query: &str) -> Option<(u64, u64, u64)> {
     let db = possible_db.as_ref()?;
-
     {
         let read_tx = db.begin_read().ok()?;
-        let table = read_tx.open_table(TRACK_DETAILS).ok()?;
+        let table = read_tx.open_table(TRACK_STATS).ok()?;
         if let Some(tup) = table.get(query).ok()? {
             return Some(tup.value());
         }
@@ -49,7 +51,7 @@ pub fn read_or_insert(possible_db: Option<&Database>, query: &str) -> Option<(u6
 
     let write_tx = db.begin_write().ok()?;
     {
-        let mut table = write_tx.open_table(TRACK_DETAILS).ok()?;
+        let mut table = write_tx.open_table(TRACK_STATS).ok()?;
         table.insert(query, default).ok()?;
     }
     write_tx.commit().ok()?;
@@ -57,10 +59,9 @@ pub fn read_or_insert(possible_db: Option<&Database>, query: &str) -> Option<(u6
     Some(default)
 }
 
-// TODO could also be async
 pub fn update_last_played(db: &Database, query: &str) -> Result<(), Error> {
     let read_tx = db.begin_read()?;
-    let table = read_tx.open_table(TRACK_DETAILS)?;
+    let table = read_tx.open_table(TRACK_STATS)?;
     let old_entry = table
         .get(query)
         .unwrap()
@@ -75,7 +76,7 @@ pub fn update_last_played(db: &Database, query: &str) -> Result<(), Error> {
             .unwrap()
             .as_secs();
 
-        let mut table = write_tx.open_table(TRACK_DETAILS)?;
+        let mut table = write_tx.open_table(TRACK_STATS)?;
         table.insert(query, new_entry)?;
     }
     write_tx.commit()?;
@@ -83,10 +84,9 @@ pub fn update_last_played(db: &Database, query: &str) -> Result<(), Error> {
     Ok(())
 }
 
-// TODO could also be async
 pub fn update_duration_played(db: &Database, query: &str, duration: u64) -> Result<(), Error> {
     let read_tx = db.begin_read()?;
-    let table = read_tx.open_table(TRACK_DETAILS)?;
+    let table = read_tx.open_table(TRACK_STATS)?;
     let old_entry = table
         .get(query)
         .unwrap()
@@ -97,7 +97,7 @@ pub fn update_duration_played(db: &Database, query: &str, duration: u64) -> Resu
     {
         let mut new_entry = old_entry.value();
         new_entry.1 += duration;
-        let mut table = write_tx.open_table(TRACK_DETAILS)?;
+        let mut table = write_tx.open_table(TRACK_STATS)?;
         table.insert(query, new_entry)?;
     }
     write_tx.commit()?;
@@ -153,6 +153,24 @@ pub fn wipe_playlist_labels(db: &Database, query_path: &str) -> Result<(), Error
     Ok(())
 }
 
+pub fn cache_metadata(db: &Database, path: &str, meta: &TrackMetadata) -> Result<(), Error> {
+    let bytes = wincode::serialize(meta).expect("serialization failed");
+    let write_tx = db.begin_write()?;
+    {
+        let mut table = write_tx.open_table(TRACK_METADATA)?;
+        table.insert(path, bytes.as_slice())?;
+    }
+    write_tx.commit()?;
+    Ok(())
+}
+
+pub fn get_cached_metadata(db: &Database, path: &str) -> Option<TrackMetadata> {
+    let read_tx = db.begin_read().ok()?;
+    let table = read_tx.open_table(TRACK_METADATA).ok()?;
+    let bytes = table.get(path).ok()??;
+    wincode::deserialize(bytes.value()).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,7 +182,7 @@ mod tests {
             .unwrap();
 
         let write_tx = db.begin_write().unwrap();
-        write_tx.open_table(TRACK_DETAILS).unwrap();
+        write_tx.open_table(TRACK_STATS).unwrap();
         write_tx.open_multimap_table(PLAYLISTS).unwrap();
         write_tx.commit().unwrap();
 

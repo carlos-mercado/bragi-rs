@@ -17,3 +17,4 @@ rodio = { version = "0.22.2", features = ["symphonia-all"] }
 serde = { version = "1.0.228", features = ["derive"] }
 toml = "1.1.2"
 tui = "0.19.0"
+wincode = { version = "0.6.0", features = ["derive"] } 

@@ -11,6 +11,8 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{io, thread};
+use wincode::SchemaRead;
+use wincode::SchemaWrite;
 
 pub mod config;
 pub mod db;
@@ -38,6 +40,17 @@ pub struct TrackDetails {
     //         (last_played, duration_played, date_added)
     pub stats: (u64, u64, u64),
     pub tags: Vec<String>,
+}
+
+#[derive(SchemaWrite, SchemaRead)]
+pub struct TrackMetadata {
+    pub artist: String,
+    pub album: String,
+    pub track_no: u32,
+    pub title: String,
+    pub date: String,
+    pub song_path: String,
+    pub duration: u64,
 }
 
 impl From<&Album> for Text<'static> {
@@ -113,7 +126,7 @@ pub fn divide_and_conquer(
     music_path: &Path,
 ) -> io::Result<()> {
     let it: fs::ReadDir = fs::read_dir(music_path)?;
-    let bucket_count = 2;
+    let bucket_count = 20;
     let mut buckets: Vec<Vec<fs::DirEntry>> = (0..bucket_count).map(|_| Vec::new()).collect();
     for (idx, path) in it.enumerate() {
         buckets[idx % bucket_count].push(path.unwrap());
@@ -170,10 +183,43 @@ fn extract_music_from_dir(
             );
         }
 
-        if is_audio && let Ok(track) = get_audio_metadata(&file_path, db) {
-            sender
-                .send(track)
-                .expect("couldn't send track through tunnel");
+        if is_audio {
+            if db.is_some()
+                && let Some(metadata) =
+                    get_cached_metadata(db.unwrap(), file_path.to_str().unwrap_or_default())
+            {
+                let tags = get_playlist_labels(db, file_path.to_str().unwrap()).unwrap_or_default();
+                let time_now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs();
+                let stats = match read_or_insert(db, file_path.to_str().unwrap()) {
+                    Some(stats) => stats,
+                    _ => (0, 0, time_now),
+                };
+
+                sender
+                    .send(TrackDetails {
+                        artist: metadata.artist,
+                        album: metadata.album,
+                        track_no: metadata.track_no,
+                        title: metadata.title,
+                        date: metadata.date,
+                        song_path: metadata.song_path,
+                        duration: metadata.duration,
+                        stats,
+                        tags,
+                    })
+                    .expect("couldn't send track through tunnel");
+            } else {
+                if db.is_some()
+                    && let Ok(track) = get_audio_metadata(&file_path, db)
+                {
+                    sender
+                        .send(track)
+                        .expect("couldn't send track through tunnel");
+                }
+            }
         }
     }
 
@@ -207,7 +253,6 @@ fn get_audio_metadata(
     let Some(tag) = tagged_file.primary_tag() else {
         return Ok(TrackDetails::default());
     };
-
     let title = tag.title().unwrap_or("Unknown Title".into()).to_string();
     let artist = tag.artist().unwrap_or("Unknown Artist".into()).to_string();
     let album = tag.album().unwrap_or("Unknown Album".into()).to_string();
