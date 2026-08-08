@@ -88,7 +88,7 @@ pub fn builder(song_listener: Receiver<TrackDetails>) -> (Vec<Album>, Vec<TrackD
                 let artist = track.artist.clone();
                 let album_title = track.album.clone();
                 let date = track.date.clone();
-                albums_hashmap
+                let album = albums_hashmap
                     .entry((artist.clone(), album_title.clone()))
                     .or_insert(Album {
                         artist,
@@ -97,9 +97,17 @@ pub fn builder(song_listener: Receiver<TrackDetails>) -> (Vec<Album>, Vec<TrackD
                         selected: false,
                         songs: Vec::new(),
                         stats: track.stats,
-                    })
-                    .songs
-                    .push(track);
+                    });
+
+                album.songs.push(track.clone());
+
+                // last_played: take the most recent
+                album.stats.0 = album.stats.0.max(track.stats.0);
+                // duration_played: accumulate
+                album.stats.1 += track.stats.1;
+                // date_added: take the earliest
+                album.stats.2 = album.stats.2.min(track.stats.2);
+                album.songs.push(track);
             }
             Err(TryRecvError::Disconnected) => break,
             Err(TryRecvError::Empty) => {}
