@@ -15,7 +15,6 @@ use std::cmp::Reverse;
 use std::fs::File;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io;
-use std::io::BufReader;
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
@@ -848,9 +847,11 @@ impl App {
             'song_loop: loop {
                 let current_track = playlist[track_no].clone();
                 let song_path = current_track.song_path;
-                let file = BufReader::new(File::open(song_path).unwrap());
+                let file = File::open(song_path).unwrap();
+                let decoder = rodio::Decoder::try_from(file).unwrap();
                 let mut song_time_remaining = Duration::from_secs(current_track.duration);
-                let player = rodio::play(&mixer, file).unwrap();
+                let player = rodio::Player::connect_new(&mixer);
+                player.append(decoder);
                 let mut is_paused = false;
 
                 '_playback_loop: loop {
