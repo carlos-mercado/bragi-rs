@@ -5,10 +5,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 // path => (last_played, duration_played, track_added)
 const TRACK_STATS: TableDefinition<&str, (u64, u64, u64)> = TableDefinition::new("tracks.db");
-
 // song_path => playlist
 const PLAYLISTS: MultimapTableDefinition<&str, &str> = MultimapTableDefinition::new("playlists.db");
-
 // song_path => metadata
 const TRACK_METADATA: TableDefinition<&str, &[u8]> = TableDefinition::new("track_metadata.db");
 

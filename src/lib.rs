@@ -28,7 +28,7 @@ pub struct Album {
     pub stats: (u64, u64, u64),
 }
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Hash, Default)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 pub struct TrackDetails {
     pub artist: String,
     pub album: String,
@@ -51,6 +51,22 @@ pub struct TrackMetadata {
     pub date: String,
     pub song_path: String,
     pub duration: u64,
+}
+
+impl Default for TrackDetails {
+    fn default() -> Self {
+        TrackDetails {
+            artist: "Unknown Artist".to_string(),
+            album: "Unknown Album.to_string".to_string(),
+            track_no: 0,
+            title: "Unknown Title.to_string".to_string(),
+            date: "1900.to_string".to_string(),
+            song_path: "None.to_string".to_string(),
+            duration: 0,
+            stats: (0, 0, 0),
+            tags: (Vec::new()),
+        }
+    }
 }
 
 impl From<&Album> for Text<'static> {
