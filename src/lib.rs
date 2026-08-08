@@ -223,6 +223,21 @@ fn extract_music_from_dir(
                 if db.is_some()
                     && let Ok(track) = get_audio_metadata(&file_path, db)
                 {
+                    cache_metadata(
+                        db.unwrap(),
+                        file_path.to_str().unwrap(),
+                        &TrackMetadata {
+                            artist: track.artist.clone(),
+                            album: track.album.clone(),
+                            track_no: track.track_no,
+                            title: track.title.clone(),
+                            date: track.date.clone(),
+                            song_path: track.song_path.clone(),
+                            duration: track.duration,
+                        },
+                    )
+                    .ok()?;
+
                     sender
                         .send(track)
                         .expect("couldn't send track through tunnel");
