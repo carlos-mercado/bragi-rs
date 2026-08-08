@@ -107,7 +107,6 @@ pub fn builder(song_listener: Receiver<TrackDetails>) -> (Vec<Album>, Vec<TrackD
                 album.stats.1 += track.stats.1;
                 // date_added: take the earliest
                 album.stats.2 = album.stats.2.min(track.stats.2);
-                album.songs.push(track);
             }
             Err(TryRecvError::Disconnected) => break,
             Err(TryRecvError::Empty) => {}
