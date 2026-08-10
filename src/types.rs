@@ -33,7 +33,7 @@ pub enum MusicStreamEvent {
     TrackAutoAdvanced(TrackDetails, usize),
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug)]
 pub enum Page {
     // this is the default page
     Albums,

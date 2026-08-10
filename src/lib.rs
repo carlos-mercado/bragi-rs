@@ -281,6 +281,18 @@ pub fn filter_tracks(tracks: &[TrackDetails], query: &str) -> Vec<TrackDetails> 
         .collect()
 }
 
+// Filter a list of tracks by a query string.
+// Matches case-insensitively against artist, album, and title.
+// Returns a new Vec containing only the matching tracks.
+pub fn filter_albums(albums: &[Album], query: &str) -> Vec<Album> {
+    let q = query.to_lowercase();
+    albums
+        .iter()
+        .filter(|a| a.artist.to_lowercase().contains(&q) || a.album.to_lowercase().contains(&q))
+        .cloned()
+        .collect()
+}
+
 // given a music file get the metadata of the track.
 // artist, album title, release date,  ...
 fn get_audio_metadata(

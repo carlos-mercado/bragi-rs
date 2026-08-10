@@ -86,7 +86,7 @@ impl Widget for &App {
         let music_selection: List = match self.viewer {
             Page::Albums => {
                 let items: Vec<ListItem> = self
-                    .albums
+                    .page_albums
                     .iter()
                     .enumerate()
                     .map(|(i, song)| {

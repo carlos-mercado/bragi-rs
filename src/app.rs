@@ -4,7 +4,7 @@ use crate::types::{
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use lru::LruCache;
 use music::config::config_init;
-use music::{Album, TrackDetails, filter_tracks};
+use music::{Album, TrackDetails, filter_albums, filter_tracks};
 use music::{builder, db::*, divide_and_conquer, get_song_art};
 use ratatui::DefaultTerminal;
 use ratatui::Frame;
@@ -29,19 +29,22 @@ pub type AlbumArtInfo = (Vec<u8>, Arc<RwLock<StatefulProtocol>>);
 pub struct App {
     pub exit: bool,
     pub cursor: usize,
-    pub albums_cursor: usize,
-    pub all_songs: Vec<TrackDetails>,
     pub mode: VimMode,
     pub viewer: Page,
 
-    // page_songs represents all songs visible after
-    // selecting an album, or searching.
-    // it's a subset of all_songs
+    // all_songs are the songs that are produced
+    // after running all_songs_unfiltered
+    // through some (possibly none) search filters
+    pub all_songs: Vec<TrackDetails>,
+    pub all_songs_unfiltered: Vec<TrackDetails>,
     pub page_songs: Vec<TrackDetails>,
-    pub albums: Vec<Album>,
+    pub page_songs_unfiltered: Vec<TrackDetails>,
     pub playing_song: Option<TrackDetails>,
     pub playing_song_idx: Option<usize>,
+    pub page_albums: Vec<Album>,
+    pub albums_unfiltered: Vec<Album>,
     pub album_selected: Option<Album>,
+    pub albums_cursor: usize,
 
     pub song_queue: Option<Vec<TrackDetails>>,
     pub play_start: Option<Instant>,
@@ -77,9 +80,11 @@ impl App {
             Path::new(&config.music_path),
         );
         drop(init_sender);
-        let (mut albums, mut songs_vec) = builder_handle.join().unwrap();
+        let (mut albums_unfiltered, mut songs_vec) = builder_handle.join().unwrap();
         songs_vec.sort();
-        albums.sort();
+        albums_unfiltered.sort();
+        let page_albums = albums_unfiltered.clone();
+        let all_songs_unfiltered = songs_vec.clone();
 
         let songs_vec_clone = songs_vec.clone();
         let audio_handle = rodio::DeviceSinkBuilder::open_default_sink()
@@ -96,7 +101,9 @@ impl App {
             cursor: 0,
             exit: false,
             page_songs: songs_vec,
-            albums,
+            page_songs_unfiltered: Vec::new(),
+            albums_unfiltered,
+            page_albums,
             playing_song: None,
             playing_song_idx: None,
             album_selected: None,
@@ -114,6 +121,7 @@ impl App {
             event_receiver: None,
             db: fixed_db,
             song_queue: None,
+            all_songs_unfiltered,
             vline_begin: None,
             viewer: Page::Albums,
             yank_buff: Vec::new(),
@@ -231,9 +239,7 @@ impl App {
                 KeyCode::Char('h') => self.prev_song(),
                 KeyCode::Char('l') => self.next_song(),
                 KeyCode::Char('/') => {
-                    self.page_songs = self.all_songs.clone();
                     self.mode = VimMode::Search;
-                    self.viewer = Page::Search;
                 }
                 KeyCode::Char(':') => self.mode = VimMode::Command,
                 KeyCode::Char('V') => {
@@ -282,7 +288,7 @@ impl App {
                                 self.yank_buff = vec![self.page_songs[self.cursor].clone()];
                             }
                             Page::Albums => {
-                                self.yank_buff = self.albums[self.cursor].songs.clone();
+                                self.yank_buff = self.page_albums[self.cursor].songs.clone();
                             }
                         }
                         self.last_key = ' ';
@@ -303,8 +309,8 @@ impl App {
                                 self.page_songs.remove(self.cursor);
                             }
                             Page::Albums => {
-                                self.yank_buff = self.albums[self.cursor].songs.clone();
-                                self.albums.remove(self.cursor);
+                                self.yank_buff = self.page_albums[self.cursor].songs.clone();
+                                self.page_albums.remove(self.cursor);
                             }
                         }
 
@@ -317,7 +323,7 @@ impl App {
                 }
                 KeyCode::Char('G') => match self.viewer {
                     Page::Albums => {
-                        self.cursor = self.albums.len() - 1;
+                        self.cursor = self.page_albums.len() - 1;
                         self.albums_cursor = self.cursor;
                     }
                     Page::Songs | Page::Search => {
@@ -347,23 +353,25 @@ impl App {
                     }
                 }
                 KeyCode::Esc => {
+                    self.page_albums = self.albums_unfiltered.clone();
                     self.cursor = self.albums_cursor;
                     self.user_buff.clear();
                     self.viewer = Page::Albums;
                     self.album_selected = None;
                 }
                 KeyCode::Enter => {
-                    if self.page_songs.is_empty() || self.albums.is_empty() {
+                    if self.page_songs.is_empty() || self.page_albums.is_empty() {
                         return;
                     }
 
                     match self.viewer {
                         Page::Albums => {
-                            self.album_selected = Some(self.albums[self.cursor].clone());
+                            self.album_selected = Some(self.page_albums[self.cursor].clone());
                             self.viewer = Page::Songs;
                             self.page_songs = self.album_selected.as_ref().unwrap().songs.clone();
-                            self.cursor = 0;
+                            self.page_songs_unfiltered = self.page_songs.clone();
                             self.preload(self.album_selected.clone().unwrap());
+                            self.cursor = 0;
                         }
                         Page::Songs | Page::Search => {
                             // the user picked a song
@@ -381,30 +389,57 @@ impl App {
             VimMode::Search => match key_event.code {
                 KeyCode::Char(c) => {
                     self.user_buff.push(c);
-                    self.page_songs = self.filter_songs();
+                    if self.user_buff.starts_with('*') {
+                        self.viewer = Page::Search;
+                    }
+
+                    match self.viewer {
+                        Page::Albums => {
+                            self.page_albums = self.filter_albums();
+                        }
+                        Page::Songs | Page::Search => {
+                            self.page_songs = self.filter_songs();
+                        }
+                    };
                     self.cursor = 0;
                 }
                 KeyCode::Backspace => {
                     if self.user_buff.is_empty() {
                         return;
                     }
-
                     self.user_buff.pop();
-                    self.page_songs = self.filter_songs();
+
+                    match self.viewer {
+                        Page::Albums => {
+                            self.page_albums = self.filter_albums();
+                        }
+                        Page::Songs | Page::Search => {
+                            self.page_songs = self.filter_songs();
+                        }
+                    };
                     self.cursor = 0;
                 }
                 KeyCode::Enter => {
                     self.cursor = 0;
                     self.user_buff.clear();
                     self.mode = VimMode::Normal;
-                    self.viewer = Page::Search;
                 }
                 KeyCode::Esc => {
                     self.cursor = 0;
                     self.user_buff.clear();
                     self.mode = VimMode::Normal;
-                    self.page_songs = self.all_songs.clone();
-                    self.viewer = Page::Albums;
+
+                    match self.viewer {
+                        Page::Albums => {
+                            self.page_albums = self.albums_unfiltered.clone();
+                        }
+                        Page::Songs => {
+                            self.page_songs = self.page_songs_unfiltered.clone();
+                        }
+                        Page::Search => {
+                            self.page_songs = self.all_songs_unfiltered.clone();
+                        }
+                    }
                 }
                 _ => {}
             },
@@ -575,32 +610,43 @@ impl App {
             let sort_by_this = args[1];
             match sort_by_this {
                 "last_played" => match self.viewer {
-                    Page::Albums => self.albums.sort_by_key(|a| Reverse(a.stats.0)),
+                    Page::Albums => self.page_albums.sort_by_key(|a| Reverse(a.stats.0)),
                     Page::Songs | Page::Search => {
                         self.page_songs.sort_by_key(|s| Reverse(s.stats.0))
                     }
                 },
                 "duration_played" => match self.viewer {
-                    Page::Albums => self.albums.sort_by_key(|a| Reverse(a.stats.1)),
+                    Page::Albums => self.page_albums.sort_by_key(|a| Reverse(a.stats.1)),
                     Page::Songs | Page::Search => {
                         self.page_songs.sort_by_key(|s| Reverse(s.stats.1))
                     }
                 },
                 "date_added" => match self.viewer {
-                    Page::Albums => self.albums.sort_by_key(|a| Reverse(a.stats.2)),
+                    Page::Albums => self.page_albums.sort_by_key(|a| Reverse(a.stats.2)),
                     Page::Songs | Page::Search => {
                         self.page_songs.sort_by_key(|s| Reverse(s.stats.2))
                     }
                 },
                 _ => {
-                    self.albums.sort();
+                    self.page_albums.sort();
                 }
             }
         }
     }
 
     fn filter_songs(&self) -> Vec<TrackDetails> {
-        filter_tracks(&self.all_songs, &self.user_buff)
+        match self.viewer {
+            Page::Songs => filter_tracks(&self.page_songs_unfiltered, &self.user_buff),
+            Page::Search => {
+                let real_buff = &self.user_buff[1..];
+                filter_tracks(&self.all_songs_unfiltered, real_buff)
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn filter_albums(&self) -> Vec<Album> {
+        filter_albums(&self.albums_unfiltered, &self.user_buff)
     }
 
     fn exit(&mut self) {
@@ -610,7 +656,7 @@ impl App {
     fn increment_counter(&mut self) {
         match self.viewer {
             Page::Albums => {
-                self.cursor = std::cmp::min(self.albums.len() - 1, self.cursor + 1);
+                self.cursor = std::cmp::min(self.page_albums.len() - 1, self.cursor + 1);
                 self.albums_cursor = self.cursor;
             }
             Page::Songs | Page::Search => {
@@ -698,7 +744,7 @@ impl App {
             .unwrap();
 
         let albums_ref = self
-            .albums
+            .page_albums
             .iter_mut()
             .find(|alb| alb.album == all_songs_ref.album && alb.artist == all_songs_ref.artist)
             .unwrap()
@@ -737,7 +783,7 @@ impl App {
                     }
                     _ => {}
                 }
-                self.albums
+                self.page_albums
                     .iter_mut()
                     .find(|alb| {
                         alb.album == all_songs_ref.album && alb.artist == all_songs_ref.artist
@@ -790,7 +836,7 @@ impl App {
                     _ => {}
                 }
 
-                self.albums
+                self.page_albums
                     .iter_mut()
                     .find(|alb| {
                         alb.album == all_songs_ref.album && alb.artist == all_songs_ref.artist

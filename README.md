@@ -23,7 +23,6 @@
 - Very early in development.
 
 ### Screenshots
-
 ![Full-screen Example](assets/full.png)
 ![Half-Split Example](assets/half1.png)
 ![Half-Split Example 2](assets/half2.png)
