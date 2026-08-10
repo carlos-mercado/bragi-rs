@@ -499,7 +499,6 @@ impl App {
                         );
                         self.update_song_label_local(update_type);
                     }
-
                     self.mode = VimMode::Normal;
                     self.user_buff.clear();
                 }
@@ -738,13 +737,13 @@ impl App {
         };
 
         let all_songs_ref = self
-            .all_songs
+            .all_songs_unfiltered
             .iter_mut()
             .find(|song| song.song_path == path.0)
             .unwrap();
 
         let albums_ref = self
-            .page_albums
+            .albums_unfiltered
             .iter_mut()
             .find(|alb| alb.album == all_songs_ref.album && alb.artist == all_songs_ref.artist)
             .unwrap()
@@ -757,6 +756,7 @@ impl App {
             LocalTrackUpdateType::DurationPlayed(song_path, time) => {
                 all_songs_ref.stats.1 += time;
                 albums_ref.stats.1 += time;
+
                 match self.viewer {
                     Page::Songs => {
                         let res = self
@@ -794,12 +794,7 @@ impl App {
             }
             LocalTrackUpdateType::WipeLabels(_) => {
                 match self.viewer {
-                    Page::Songs => {
-                        self.album_selected.as_mut().unwrap().songs[self.cursor]
-                            .tags
-                            .clear();
-                    }
-                    Page::Search => self.page_songs[self.cursor].tags.clear(),
+                    Page::Songs | Page::Search => self.page_songs[self.cursor].tags.clear(),
                     _ => {}
                 }
                 all_songs_ref.tags.clear();
@@ -807,12 +802,7 @@ impl App {
             }
             LocalTrackUpdateType::AddLabel(_, label) => {
                 match self.viewer {
-                    Page::Songs => {
-                        self.album_selected.as_mut().unwrap().songs[self.cursor]
-                            .tags
-                            .push(self.user_buff.clone());
-                    }
-                    Page::Search => {
+                    Page::Songs | Page::Search => {
                         self.page_songs[self.cursor]
                             .tags
                             .push(self.user_buff.clone());
