@@ -758,20 +758,7 @@ impl App {
                 albums_ref.stats.1 += time;
 
                 match self.viewer {
-                    Page::Songs => {
-                        let res = self
-                            .album_selected
-                            .as_mut()
-                            .unwrap()
-                            .songs
-                            .iter_mut()
-                            .find(|song| song.song_path == song_path.0);
-
-                        if let Some(song_ref) = res {
-                            song_ref.stats.1 += time;
-                        }
-                    }
-                    Page::Search => {
+                    Page::Search | Page::Songs => {
                         let song_ref = self
                             .page_songs
                             .iter_mut()
@@ -783,7 +770,8 @@ impl App {
                     }
                     _ => {}
                 }
-                self.page_albums
+
+                self.albums_unfiltered
                     .iter_mut()
                     .find(|alb| {
                         alb.album == all_songs_ref.album && alb.artist == all_songs_ref.artist
@@ -826,7 +814,7 @@ impl App {
                     _ => {}
                 }
 
-                self.page_albums
+                self.albums_unfiltered
                     .iter_mut()
                     .find(|alb| {
                         alb.album == all_songs_ref.album && alb.artist == all_songs_ref.artist
