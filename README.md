@@ -1,10 +1,9 @@
 # bragi-rs
-
 - Terminal-based, music browser and player.
 - Vim motions.
+- Inspired by [oil.nvim](https://github.com/stevearc/oil.nvim)
 
 ### Keybinds
-
 - `j`: move down
 - `k`: move up
 - `h`: previous song
