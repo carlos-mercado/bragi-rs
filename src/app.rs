@@ -390,6 +390,9 @@ impl App {
                 KeyCode::Char(c) => {
                     self.user_buff.push(c);
                     if self.user_buff.starts_with('*') {
+                        // if a search query starts with this
+                        // seach the list of all songs in the
+                        // library
                         self.viewer = Page::Search;
                     }
 

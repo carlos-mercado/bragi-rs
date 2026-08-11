@@ -57,11 +57,11 @@ impl Default for TrackDetails {
     fn default() -> Self {
         TrackDetails {
             artist: "Unknown Artist".to_string(),
-            album: "Unknown Album.to_string".to_string(),
+            album: "Unknown Album".to_string(),
             track_no: 0,
-            title: "Unknown Title.to_string".to_string(),
-            date: "1900.to_string".to_string(),
-            song_path: "None.to_string".to_string(),
+            title: "Unknown Title".to_string(),
+            date: "1900".to_string(),
+            song_path: "None".to_string(),
             duration: 0,
             stats: (0, 0, 0),
             tags: (Vec::new()),
@@ -202,7 +202,7 @@ fn extract_music_from_dir(
         if let Some(file_type) = file_type {
             is_audio = matches!(
                 file_type.to_lowercase().as_str(),
-                "mp3" | "flac" | "wav" | "aac" | "ogg" | "m4a" | "aiff"
+                "mp3" | "flac" | "wav" | "aac" | "ogg" | "m4a" | "aiff" | "alac"
             );
         }
 
@@ -238,21 +238,30 @@ fn extract_music_from_dir(
                 if db.is_some()
                     && let Ok(track) = get_audio_metadata(&file_path, db)
                 {
-                    cache_metadata(
-                        db.unwrap(),
-                        file_path.to_str().unwrap(),
-                        &TrackMetadata {
-                            artist: track.artist.clone(),
-                            album: track.album.clone(),
-                            track_no: track.track_no,
-                            title: track.title.clone(),
-                            date: track.date.clone(),
-                            song_path: track.song_path.clone(),
-                            duration: track.duration,
-                        },
-                    )
-                    .ok()?;
+                    // if this is a track who's tags could not be parsed, don't cache them
+                    // wait for the user to fix the tags so that when it is updated,
+                    // the cache does not return a stale version of the track.
+                    if track.title != TrackDetails::default().title
+                        || track.artist != TrackDetails::default().artist
+                    {
+                        cache_metadata(
+                            db.unwrap(),
+                            file_path.to_str().unwrap(),
+                            &TrackMetadata {
+                                artist: track.artist.clone(),
+                                album: track.album.clone(),
+                                track_no: track.track_no,
+                                title: track.title.clone(),
+                                date: track.date.clone(),
+                                song_path: track.song_path.clone(),
+                                duration: track.duration,
+                            },
+                        )
+                        .ok()?;
+                    }
 
+                    // send the track regardless. maybe it can help the user find
+                    // the bad track.
                     sender
                         .send(track)
                         .expect("couldn't send track through tunnel");
@@ -262,6 +271,52 @@ fn extract_music_from_dir(
     }
 
     Some(total)
+}
+
+// given a music file get the metadata of the track.
+// artist, album title, release date,  ...
+fn get_audio_metadata(
+    path: &Path,
+    db: Option<&Database>,
+) -> Result<TrackDetails, Box<dyn std::error::Error>> {
+    let song_path = path.to_string_lossy().to_string();
+    let default = || TrackDetails {
+        song_path: song_path.clone(),
+        ..TrackDetails::default()
+    };
+    let Ok(tagged_file) = read_from_path(path) else {
+        return Ok(default());
+    };
+    let Some(tag) = tagged_file.primary_tag() else {
+        return Ok(default());
+    };
+
+    let time_now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    Ok(TrackDetails {
+        title: tag.title().unwrap_or("Unknown Title".into()).to_string(),
+        artist: tag.artist().unwrap_or("Unknown Artist".into()).to_string(),
+        album: tag.album().unwrap_or("Unknown Album".into()).to_string(),
+        date: tag
+            .date()
+            .unwrap_or(lofty::tag::items::Timestamp {
+                year: 1900,
+                month: Some(1),
+                day: Some(1),
+                hour: Some(0),
+                minute: Some(0),
+                second: Some(0),
+            })
+            .to_string(),
+        track_no: tag.track().unwrap_or(0),
+        duration: tagged_file.properties().duration().as_secs(),
+        stats: read_or_insert(db, &song_path).unwrap_or((0, 0, time_now)),
+        tags: get_playlist_labels(db, &song_path).unwrap_or_default(),
+        song_path,
+    })
 }
 
 // Filter a list of tracks by a query string.
@@ -291,59 +346,6 @@ pub fn filter_albums(albums: &[Album], query: &str) -> Vec<Album> {
         .filter(|a| a.artist.to_lowercase().contains(&q) || a.album.to_lowercase().contains(&q))
         .cloned()
         .collect()
-}
-
-// given a music file get the metadata of the track.
-// artist, album title, release date,  ...
-fn get_audio_metadata(
-    path: &Path,
-    db: Option<&Database>,
-) -> Result<TrackDetails, Box<dyn std::error::Error>> {
-    let tagged_file: TaggedFile = read_from_path(path)?;
-    let Some(tag) = tagged_file.primary_tag() else {
-        return Ok(TrackDetails::default());
-    };
-    let title = tag.title().unwrap_or("Unknown Title".into()).to_string();
-    let artist = tag.artist().unwrap_or("Unknown Artist".into()).to_string();
-    let album = tag.album().unwrap_or("Unknown Album".into()).to_string();
-    let date = tag
-        .date()
-        .unwrap_or(lofty::tag::items::Timestamp {
-            year: (1900),
-            month: (Some(1)),
-            day: (Some(1)),
-            hour: (Some(0)),
-            minute: (Some(0)),
-            second: (Some(0)),
-        })
-        .to_string();
-    let track_no = tag.track().unwrap_or(0);
-    let song_path = path.to_string_lossy().to_string();
-    let duration = tagged_file.properties().duration().as_secs();
-
-    let time_now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-
-    let song_stats = match read_or_insert(db, &song_path) {
-        Some(stats) => stats,
-        _ => (0, 0, time_now),
-    };
-
-    let tags = get_playlist_labels(db, &song_path).unwrap_or_default();
-
-    Ok(TrackDetails {
-        artist,
-        album,
-        title,
-        track_no,
-        date,
-        song_path,
-        duration,
-        stats: song_stats,
-        tags,
-    })
 }
 
 pub fn get_song_art(song: &TrackDetails) -> Option<Vec<u8>> {
