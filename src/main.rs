@@ -1,4 +1,5 @@
 mod app;
+mod app_utils;
 mod config;
 mod types;
 mod ui;

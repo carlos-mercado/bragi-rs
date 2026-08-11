@@ -181,7 +181,9 @@ pub fn divide_and_conquer(
     music_path: &Path,
 ) -> io::Result<()> {
     let it: fs::ReadDir = fs::read_dir(music_path)?;
-    let bucket_count = 20;
+    let bucket_count = std::thread::available_parallelism()
+        .map(|n| n.get() * 2)
+        .unwrap_or(4);
     let mut buckets: Vec<Vec<fs::DirEntry>> = (0..bucket_count).map(|_| Vec::new()).collect();
     for (idx, path) in it.enumerate() {
         buckets[idx % bucket_count].push(path.unwrap());

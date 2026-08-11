@@ -8,6 +8,10 @@ pkgs.mkShell {
     pkgs.alsa-utils 
     pkgs.alsa-lib
     pkgs.pipewire
+    
+    # Correct Rust profiling tools
+    pkgs.cargo-flamegraph
+    pkgs.linuxPackages.perf
   ];
   shellHook = ''
     export ALSA_PLUGIN_DIR="${pkgs.pipewire}/lib/alsa-lib"
