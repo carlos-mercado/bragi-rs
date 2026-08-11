@@ -38,10 +38,10 @@ pub struct App {
     pub all_songs_unfiltered: Vec<TrackDetails>,
     pub page_songs: Vec<TrackDetails>,
     pub page_songs_unfiltered: Vec<TrackDetails>,
-    pub playing_song: Option<TrackDetails>,
-    pub playing_song_idx: Option<usize>,
     pub page_albums: Vec<Album>,
     pub albums_unfiltered: Vec<Album>,
+    pub playing_song: Option<TrackDetails>,
+    pub playing_song_idx: Option<usize>,
     pub album_selected: Option<Album>,
     pub albums_cursor: usize,
 
@@ -359,12 +359,12 @@ impl App {
                     self.album_selected = None;
                 }
                 KeyCode::Enter => {
-                    if self.page_songs.is_empty() || self.page_albums.is_empty() {
-                        return;
-                    }
-
                     match self.viewer {
                         Page::Albums => {
+                            if self.page_albums.is_empty() {
+                                return;
+                            }
+                            // user picked an album
                             self.album_selected = Some(self.page_albums[self.cursor].clone());
                             self.viewer = Page::Songs;
                             self.page_songs = self.album_selected.as_ref().unwrap().songs.clone();
@@ -373,6 +373,9 @@ impl App {
                             self.cursor = 0;
                         }
                         Page::Songs | Page::Search => {
+                            if self.page_songs.is_empty() {
+                                return;
+                            }
                             // the user picked a song
                             self.playback_sender
                                 .send(MusicStreamEvent::NewPlaylistEvent(
