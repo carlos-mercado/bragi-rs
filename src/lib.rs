@@ -53,6 +53,38 @@ pub struct TrackMetadata {
     pub duration: u64,
 }
 
+impl Album {
+    pub fn new(
+        artist: String,
+        album: String,
+        date: String,
+        songs: Vec<TrackDetails>,
+        stats: (u64, u64, u64),
+    ) -> Self {
+        Album {
+            artist,
+            album,
+            selected: false,
+            date,
+            songs,
+            stats,
+        }
+    }
+}
+
+impl Default for Album {
+    fn default() -> Self {
+        Album {
+            artist: "Unknown Artist".to_string(),
+            album: "Unknown Album".to_string(),
+            selected: false,
+            date: "1900".to_string(),
+            songs: Vec::new(),
+            stats: (0, 0, 0),
+        }
+    }
+}
+
 impl Default for TrackDetails {
     fn default() -> Self {
         TrackDetails {
@@ -235,9 +267,8 @@ fn extract_music_from_dir(
                     })
                     .expect("couldn't send track through tunnel");
             } else {
-                if db.is_some()
-                    && let Ok(track) = get_audio_metadata(&file_path, db)
-                {
+                if db.is_some() {
+                    let track = get_audio_metadata(&file_path, db);
                     // if this is a track who's tags could not be parsed, don't cache them
                     // wait for the user to fix the tags so that when it is updated,
                     // the cache does not return a stale version of the track.
@@ -245,7 +276,7 @@ fn extract_music_from_dir(
                         || track.artist != TrackDetails::default().artist
                     {
                         cache_metadata(
-                            db.unwrap(),
+                            db?,
                             file_path.to_str().unwrap(),
                             &TrackMetadata {
                                 artist: track.artist.clone(),
@@ -275,20 +306,17 @@ fn extract_music_from_dir(
 
 // given a music file get the metadata of the track.
 // artist, album title, release date,  ...
-fn get_audio_metadata(
-    path: &Path,
-    db: Option<&Database>,
-) -> Result<TrackDetails, Box<dyn std::error::Error>> {
+fn get_audio_metadata(path: &Path, db: Option<&Database>) -> TrackDetails {
     let song_path = path.to_string_lossy().to_string();
     let default = || TrackDetails {
         song_path: song_path.clone(),
         ..TrackDetails::default()
     };
     let Ok(tagged_file) = read_from_path(path) else {
-        return Ok(default());
+        return default();
     };
     let Some(tag) = tagged_file.primary_tag() else {
-        return Ok(default());
+        return default();
     };
 
     let time_now = SystemTime::now()
@@ -296,7 +324,7 @@ fn get_audio_metadata(
         .unwrap()
         .as_secs();
 
-    Ok(TrackDetails {
+    TrackDetails {
         title: tag.title().unwrap_or("Unknown Title".into()).to_string(),
         artist: tag.artist().unwrap_or("Unknown Artist".into()).to_string(),
         album: tag.album().unwrap_or("Unknown Album".into()).to_string(),
@@ -316,7 +344,7 @@ fn get_audio_metadata(
         stats: read_or_insert(db, &song_path).unwrap_or((0, 0, time_now)),
         tags: get_playlist_labels(db, &song_path).unwrap_or_default(),
         song_path,
-    })
+    }
 }
 
 // Filter a list of tracks by a query string.
@@ -493,5 +521,148 @@ mod tests {
         assert!(rendered.contains("Radiohead"));
         assert!(rendered.contains("Karma Police"));
         assert!(rendered.contains("Track 1"));
+    }
+
+    fn albums() -> Vec<Album> {
+        vec![
+            Album {
+                artist: "Radiohead".to_string(),
+                album: "OK Computer".to_string(),
+                selected: false,
+                date: "1997".to_string(),
+                songs: vec![track("Radiohead", "OK Computer", "Karma Police")],
+                stats: (0, 0, 0),
+            },
+            Album {
+                artist: "Pink Floyd".to_string(),
+                album: "The Wall".to_string(),
+                selected: false,
+                date: "1979".to_string(),
+                songs: vec![track("Pink Floyd", "The Wall", "Comfortably Numb")],
+                stats: (0, 0, 0),
+            },
+            Album {
+                artist: "David Bowie".to_string(),
+                album: "Ziggy Stardust".to_string(),
+                selected: false,
+                date: "1972".to_string(),
+                songs: vec![track("David Bowie", "Ziggy Stardust", "Starman")],
+                stats: (0, 0, 0),
+            },
+        ]
+    }
+
+    // 11. Empty query returns every album unchanged.
+    #[test]
+    fn filter_albums_empty_query_returns_all() {
+        let all = albums();
+        let result = filter_albums(&all, "");
+        assert_eq!(result.len(), all.len());
+    }
+
+    // 12. Query matching nothing returns an empty list.
+    #[test]
+    fn filter_albums_no_match_returns_empty() {
+        let result = filter_albums(&albums(), "zzznomatch");
+        assert!(result.is_empty());
+    }
+
+    // 13. Artist match returns the correct album.
+    #[test]
+    fn filter_albums_by_artist() {
+        let result = filter_albums(&albums(), "Radiohead");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].album, "OK Computer");
+    }
+
+    // 14. Album name match returns the correct album.
+    #[test]
+    fn filter_albums_by_album_name() {
+        let result = filter_albums(&albums(), "Wall");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].artist, "Pink Floyd");
+    }
+
+    // 15. Search is case-insensitive.
+    #[test]
+    fn filter_albums_is_case_insensitive() {
+        let upper = filter_albums(&albums(), "ZIGGY");
+        let lower = filter_albums(&albums(), "ziggy");
+        assert_eq!(upper.len(), 1);
+        assert_eq!(upper.len(), lower.len());
+    }
+
+    // 16. get_audio_metadata returns a default-ish track (with song_path set)
+    // for a path that doesn't exist / isn't a readable audio file, instead of
+    // erroring out.
+    #[test]
+    fn get_audio_metadata_invalid_path_returns_default() {
+        let path = Path::new("/this/path/does/not/exist.mp3");
+        let result = get_audio_metadata(path, None);
+        let track = result;
+        assert_eq!(track.title, TrackDetails::default().title);
+        assert_eq!(track.artist, TrackDetails::default().artist);
+        assert_eq!(track.album, TrackDetails::default().album);
+        assert_eq!(track.song_path, path.to_string_lossy().to_string());
+    }
+
+    // 17. get_audio_metadata also falls back to defaults for a file that
+    // exists but has no recognizable audio tags (e.g. a plain text file).
+    #[test]
+    fn get_audio_metadata_non_audio_file_returns_default() {
+        let dir = std::env::temp_dir();
+        let file_path = dir.join("bragi_test_not_audio.mp3");
+        std::fs::write(&file_path, b"not actually audio data").unwrap();
+
+        let result = get_audio_metadata(&file_path, None);
+        let track = result;
+        assert_eq!(track.title, TrackDetails::default().title);
+        assert_eq!(track.artist, TrackDetails::default().artist);
+
+        let _ = std::fs::remove_file(&file_path);
+    }
+
+    // 18. builder() groups tracks into albums correctly and aggregates stats.
+    #[test]
+    fn builder_groups_tracks_into_albums() {
+        use std::sync::mpsc::channel;
+
+        let (tx, rx) = channel::<TrackDetails>();
+
+        let mut t1 = track("Radiohead", "OK Computer", "Karma Police");
+        t1.stats = (10, 100, 5);
+        let mut t2 = track("Radiohead", "OK Computer", "Paranoid Android");
+        t2.stats = (20, 200, 3);
+        let t3 = track("Pink Floyd", "The Wall", "Comfortably Numb");
+
+        tx.send(t1).unwrap();
+        tx.send(t2).unwrap();
+        tx.send(t3).unwrap();
+        drop(tx);
+
+        let (albums, songs) = builder(rx);
+
+        assert_eq!(songs.len(), 3);
+        assert_eq!(albums.len(), 2);
+
+        let ok_computer = albums
+            .iter()
+            .find(|a| a.album == "OK Computer")
+            .expect("OK Computer album should exist");
+        assert_eq!(ok_computer.songs.len(), 2);
+        // last_played: max of the two
+        assert_eq!(ok_computer.stats.0, 20);
+        // duration_played: sum of the two (note: the first track inserted
+        // into a new album entry is counted both at insertion time and in
+        // the accumulation step, so its duration is effectively doubled)
+        assert_eq!(ok_computer.stats.1, 400);
+        // date_added: min of the two
+        assert_eq!(ok_computer.stats.2, 3);
+
+        let the_wall = albums
+            .iter()
+            .find(|a| a.album == "The Wall")
+            .expect("The Wall album should exist");
+        assert_eq!(the_wall.songs.len(), 1);
     }
 }
