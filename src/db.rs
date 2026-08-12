@@ -86,6 +86,19 @@ pub fn read_or_insert(possible_db: Option<&Database>, query: &str) -> Option<(u6
     Some(default)
 }
 
+pub fn read_stats(possible_db: Option<&Database>, query: &str) -> Option<(u64, u64, u64)> {
+    let db = possible_db.as_ref()?;
+    {
+        let read_tx = db.begin_read().ok()?;
+        let table = read_tx.open_table(TRACK_STATS).ok()?;
+        if let Some(tup) = table.get(query).ok()? {
+            return Some(tup.value());
+        }
+    }
+
+    None
+}
+
 pub fn update_last_played(db: &Database, query: &str) -> Result<(), Error> {
     let read_tx = db.begin_read()?;
     let table = read_tx.open_table(TRACK_STATS)?;
@@ -111,15 +124,12 @@ pub fn update_last_played(db: &Database, query: &str) -> Result<(), Error> {
 pub fn update_duration_played(db: &Database, query: &str, duration: u64) -> Result<(), Error> {
     let read_tx = db.begin_read()?;
     let table = read_tx.open_table(TRACK_STATS)?;
-    let old_entry = table
-        .get(query)
-        .unwrap()
-        .expect("This entry should exist already. It does not.");
+    let old_entry = table.get(query)?.map(|v| v.value()).unwrap_or_default();
     drop(read_tx);
 
     let write_tx = db.begin_write()?;
     {
-        let mut new_entry = old_entry.value();
+        let mut new_entry = old_entry;
         new_entry.1 += duration;
         let mut table = write_tx.open_table(TRACK_STATS)?;
         table.insert(query, new_entry)?;
