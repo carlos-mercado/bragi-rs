@@ -71,8 +71,9 @@ impl App {
         let config = config_init();
         let db = db_setup();
         let fixed_db = db.map(Arc::new);
+        let fixed_db_2 = fixed_db.clone();
         let (init_sender, init_receiver) = channel();
-        let builder_handle = thread::spawn(move || builder(init_receiver));
+        let builder_handle = thread::spawn(move || builder(init_receiver, fixed_db_2));
         let _resolved = divide_and_conquer(
             fixed_db.clone(),
             Arc::new(init_sender.clone()),

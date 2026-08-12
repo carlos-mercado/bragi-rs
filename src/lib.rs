@@ -53,6 +53,26 @@ pub struct TrackMetadata {
     pub duration: u64,
 }
 
+impl From<TrackDetails> for TrackMetadata {
+    fn from(song: TrackDetails) -> Self {
+        Self {
+            artist: song.artist.clone(),
+            album: song.album.clone(),
+            track_no: song.track_no,
+            title: song.title.clone(),
+            date: song.date.clone(),
+            song_path: song.song_path.clone(),
+            duration: song.duration,
+        }
+    }
+}
+
+impl TrackDetails {
+    pub fn is_missing_critical_tags(&self) -> bool {
+        self.artist == TrackDetails::default().artist || self.title == TrackDetails::default().title
+    }
+}
+
 impl Album {
     pub fn new(
         artist: String,
@@ -128,11 +148,17 @@ impl From<&TrackDetails> for Text<'static> {
     }
 }
 
-pub fn builder(song_listener: Receiver<TrackDetails>) -> (Vec<Album>, Vec<TrackDetails>) {
+pub fn builder(
+    song_listener: Receiver<TrackDetails>,
+    db: Option<Arc<Database>>,
+) -> (Vec<Album>, Vec<TrackDetails>) {
     let mut albums_hashmap: HashMap<(String, String), Album> = HashMap::new();
+    let mut all_songs = Vec::new();
+
     loop {
         match song_listener.try_recv() {
             Ok(track) => {
+                all_songs.push(track.clone());
                 let artist = track.artist.clone();
                 let album_title = track.album.clone();
                 let date = track.date.clone();
@@ -161,10 +187,10 @@ pub fn builder(song_listener: Receiver<TrackDetails>) -> (Vec<Album>, Vec<TrackD
         }
     }
 
-    let songs: Vec<TrackDetails> = albums_hashmap
-        .values()
-        .flat_map(|a| a.songs.clone())
-        .collect();
+    let db = db.clone();
+    let _result = insert_batch(db.as_deref(), &all_songs);
+
+    all_songs.sort();
     let albums: Vec<Album> = albums_hashmap
         .values_mut()
         .map(|a| {
@@ -172,7 +198,7 @@ pub fn builder(song_listener: Receiver<TrackDetails>) -> (Vec<Album>, Vec<TrackD
             a.clone()
         })
         .collect();
-    (albums, songs)
+    (albums, all_songs)
 }
 
 pub fn divide_and_conquer(
@@ -274,9 +300,7 @@ fn extract_music_from_dir(
                     // if this is a track who's tags could not be parsed, don't cache them
                     // wait for the user to fix the tags so that when it is updated,
                     // the cache does not return a stale version of the track.
-                    if track.title != TrackDetails::default().title
-                        || track.artist != TrackDetails::default().artist
-                    {
+                    if !track.is_missing_critical_tags() {
                         cache_metadata(
                             db?,
                             file_path.to_str().unwrap(),
@@ -642,7 +666,7 @@ mod tests {
         tx.send(t3).unwrap();
         drop(tx);
 
-        let (albums, songs) = builder(rx);
+        let (albums, songs) = builder(rx, None);
 
         assert_eq!(songs.len(), 3);
         assert_eq!(albums.len(), 2);

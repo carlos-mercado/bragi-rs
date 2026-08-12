@@ -1,4 +1,4 @@
-use crate::TrackMetadata;
+use crate::{TrackDetails, TrackMetadata};
 use redb::{Database, Error, MultimapTableDefinition, ReadableDatabase, TableDefinition};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -26,7 +26,36 @@ pub fn db_setup() -> Option<Database> {
     Some(db)
 }
 
-// if an song_path already exsits in the table read and return
+// given a list of tracks
+// cache each tracks metadata to the db
+pub fn insert_batch(
+    possible_db: Option<&Database>,
+    songs: &Vec<TrackDetails>,
+) -> Result<(), Error> {
+    let Some(db) = possible_db.as_ref() else {
+        return Ok(());
+    };
+    let write_tx = db.begin_write()?;
+    {
+        let mut table = write_tx.open_table(TRACK_METADATA)?;
+        for s in songs {
+            // any tracks missing critical tags (album_title, artist_name),
+            // should not be cached
+            if s.is_missing_critical_tags() {
+                continue;
+            }
+            let unserialized_metadata: TrackMetadata = s.clone().into();
+            let bytes = wincode::serialize(&unserialized_metadata).expect("serialization failed");
+            table.insert(unserialized_metadata.song_path.as_str(), bytes.as_slice())?;
+        }
+    }
+    write_tx.commit()?;
+
+    Ok(())
+}
+
+// if an song_path already exsits in the table
+// read and return the stats
 // otherwise create a new entry with default values,
 pub fn read_or_insert(possible_db: Option<&Database>, query: &str) -> Option<(u64, u64, u64)> {
     let db = possible_db.as_ref()?;
@@ -60,15 +89,12 @@ pub fn read_or_insert(possible_db: Option<&Database>, query: &str) -> Option<(u6
 pub fn update_last_played(db: &Database, query: &str) -> Result<(), Error> {
     let read_tx = db.begin_read()?;
     let table = read_tx.open_table(TRACK_STATS)?;
-    let old_entry = table
-        .get(query)
-        .unwrap()
-        .expect("This entry should exist already. It does not.");
+    let old_entry = table.get(query)?.map(|v| v.value()).unwrap_or_default();
     drop(read_tx);
 
     let write_tx = db.begin_write()?;
     {
-        let mut new_entry = old_entry.value();
+        let mut new_entry = old_entry;
         new_entry.0 = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -233,5 +259,83 @@ mod tests {
         let query_path = "/this/is/a/fakepath.mp3";
         let tags = get_playlist_labels(Some(&db), query_path).unwrap();
         assert!(tags.is_empty());
+    }
+
+    fn track(artist: &str, album: &str, title: &str, song_path: &str) -> TrackDetails {
+        TrackDetails {
+            artist: artist.to_string(),
+            album: album.to_string(),
+            title: title.to_string(),
+            track_no: 1,
+            date: "2020".to_string(),
+            song_path: song_path.to_string(),
+            duration: 180,
+            stats: (0, 0, 0),
+            tags: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn insert_batch_caches_valid_tracks() {
+        let db = setup_test_db();
+        let songs = vec![
+            track("Radiohead", "OK Computer", "Karma Police", "/a.mp3"),
+            track("Pink Floyd", "The Wall", "Comfortably Numb", "/b.mp3"),
+        ];
+
+        insert_batch(Some(&db), &songs).unwrap();
+
+        let cached_a = get_cached_metadata(&db, "/a.mp3").unwrap();
+        assert_eq!(cached_a.artist, "Radiohead");
+        assert_eq!(cached_a.album, "OK Computer");
+        assert_eq!(cached_a.title, "Karma Police");
+
+        let cached_b = get_cached_metadata(&db, "/b.mp3").unwrap();
+        assert_eq!(cached_b.artist, "Pink Floyd");
+        assert_eq!(cached_b.title, "Comfortably Numb");
+    }
+
+    #[test]
+    fn insert_batch_skips_tracks_missing_critical_tags() {
+        let db = setup_test_db();
+        let good_track = track("Radiohead", "OK Computer", "Karma Police", "/good.mp3");
+        let mut bad_track = track("Radiohead", "OK Computer", "Karma Police", "/bad.mp3");
+        bad_track.title = TrackDetails::default().title;
+
+        let songs = vec![good_track, bad_track];
+
+        insert_batch(Some(&db), &songs).unwrap();
+
+        assert!(get_cached_metadata(&db, "/good.mp3").is_some());
+        assert!(get_cached_metadata(&db, "/bad.mp3").is_none());
+    }
+
+    #[test]
+    fn insert_batch_with_no_db_is_noop() {
+        let songs = vec![track("Radiohead", "OK Computer", "Karma Police", "/a.mp3")];
+
+        let result = insert_batch(None, &songs);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn insert_batch_with_empty_vec_is_noop() {
+        let db = setup_test_db();
+        let songs: Vec<TrackDetails> = Vec::new();
+        let result = insert_batch(Some(&db), &songs);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn insert_batch_overwrites_existing_entry() {
+        let db = setup_test_db();
+        let original = vec![track("Radiohead", "OK Computer", "Karma Police", "/a.mp3")];
+        insert_batch(Some(&db), &original).unwrap();
+
+        let updated = vec![track("Radiohead", "OK Computer", "Airbag", "/a.mp3")];
+        insert_batch(Some(&db), &updated).unwrap();
+
+        let cached = get_cached_metadata(&db, "/a.mp3").unwrap();
+        assert_eq!(cached.title, "Airbag");
     }
 }
