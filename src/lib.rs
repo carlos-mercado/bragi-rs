@@ -297,13 +297,6 @@ fn extract_music_from_dir(
             } else {
                 if db.is_some() {
                     let track = get_audio_metadata(&file_path, db);
-                    // caching happens in a single batch at the end of the
-                    // scan (see `builder`'s call to `insert_batch`), instead
-                    // of one write-transaction per file here. This avoids
-                    // paying a commit/fsync cost for every single track.
-
-                    // send the track regardless. maybe it can help the user find
-                    // the bad track.
                     sender
                         .send(track)
                         .expect("couldn't send track through tunnel");
