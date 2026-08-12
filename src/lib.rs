@@ -297,25 +297,10 @@ fn extract_music_from_dir(
             } else {
                 if db.is_some() {
                     let track = get_audio_metadata(&file_path, db);
-                    // if this is a track who's tags could not be parsed, don't cache them
-                    // wait for the user to fix the tags so that when it is updated,
-                    // the cache does not return a stale version of the track.
-                    if !track.is_missing_critical_tags() {
-                        cache_metadata(
-                            db?,
-                            file_path.to_str().unwrap(),
-                            &TrackMetadata {
-                                artist: track.artist.clone(),
-                                album: track.album.clone(),
-                                track_no: track.track_no,
-                                title: track.title.clone(),
-                                date: track.date.clone(),
-                                song_path: track.song_path.clone(),
-                                duration: track.duration,
-                            },
-                        )
-                        .ok()?;
-                    }
+                    // caching happens in a single batch at the end of the
+                    // scan (see `builder`'s call to `insert_batch`), instead
+                    // of one write-transaction per file here. This avoids
+                    // paying a commit/fsync cost for every single track.
 
                     // send the track regardless. maybe it can help the user find
                     // the bad track.

@@ -12,7 +12,7 @@ const TRACK_METADATA: TableDefinition<&str, &[u8]> = TableDefinition::new("track
 
 pub fn db_setup() -> Option<Database> {
     let db_path: PathBuf = dirs::data_dir()
-        .expect("could not find home dir")
+        .expect("could not find home directory")
         .join("bragi/bragi.db");
 
     let db = Database::create(&db_path).ok()?;
