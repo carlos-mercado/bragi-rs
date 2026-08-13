@@ -1,4 +1,4 @@
-use music::TrackDetails;
+use music::{Album, TrackDetails};
 
 #[derive(Clone)]
 pub struct SongPath(pub String);
@@ -33,7 +33,7 @@ pub enum MusicStreamEvent {
     TrackAutoAdvanced(TrackDetails, usize),
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone, Copy)]
 pub enum Page {
     // this is the default page
     Albums,
@@ -53,6 +53,12 @@ pub enum LocalTrackUpdateType {
     LastPlayed(SongPath),
     AddLabel(SongPath, Label),
     WipeLabels(SongPath),
+}
+
+#[derive(Clone)]
+pub enum MusicItems {
+    Albums(Vec<Album>),
+    Songs(Vec<TrackDetails>),
 }
 
 /*pub enum Item {

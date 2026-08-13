@@ -27,8 +27,8 @@ pub type AlbumArtInfo = (Vec<u8>, Arc<RwLock<StatefulProtocol>>);
 
 pub struct App {
     pub exit: bool,
-    pub cursor: usize,
     pub mode: VimMode,
+    pub cursor: usize,
     pub viewer: Page,
 
     // all_songs are the songs that are produced
@@ -45,6 +45,10 @@ pub struct App {
     pub album_selected: Option<Album>,
     pub albums_cursor: usize,
 
+    // cursor, Page, list of songs/albums
+    pub selection_state_stack: Vec<(usize, Page, MusicItems)>,
+    // albums -> songs -> `Esc`  -> albums
+    // albums -> filter -> filtered_albums -> songs -> Esc -> filtered_albums -> albums
     pub song_queue: Option<Vec<TrackDetails>>,
     pub play_start: Option<Instant>,
     pub elapsed_before_paused: Duration,
@@ -98,6 +102,11 @@ impl App {
         let cache = Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(10).unwrap())));
 
         let mut app = App {
+            selection_state_stack: vec![(
+                0,
+                Page::Albums,
+                MusicItems::Albums(albums_unfiltered.clone()),
+            )],
             cursor: 0,
             exit: false,
             page_songs: songs_vec,
@@ -353,15 +362,36 @@ impl App {
                     }
                 }
                 KeyCode::Esc => {
-                    self.page_albums = self.albums_unfiltered.clone();
-                    self.cursor = self.albums_cursor;
                     self.user_buff.clear();
-                    self.viewer = Page::Albums;
                     self.album_selected = None;
+
+                    if let Some((c, page, music_items)) = self.selection_state_stack.last() {
+                        self.cursor = *c;
+                        self.viewer = *page;
+                        match music_items {
+                            MusicItems::Albums(a) => self.page_albums = a.to_vec(),
+                            MusicItems::Songs(s) => self.page_songs = s.to_vec(),
+                        }
+
+                        self.selection_state_stack.pop();
+
+                        if self.selection_state_stack.is_empty() {
+                            self.selection_state_stack.push((
+                                self.cursor,
+                                Page::Albums,
+                                MusicItems::Albums(self.albums_unfiltered.clone()),
+                            ));
+                        }
+                    }
                 }
                 KeyCode::Enter => {
                     match self.viewer {
                         Page::Albums => {
+                            self.selection_state_stack.push((
+                                self.cursor,
+                                Page::Albums,
+                                MusicItems::Albums(self.page_albums.clone()),
+                            ));
                             if self.page_albums.is_empty() {
                                 return;
                             }
@@ -426,6 +456,13 @@ impl App {
                     self.cursor = 0;
                 }
                 KeyCode::Enter => {
+                    /* if self.viewer == Page::Albums {
+                        self.selection_state_stack.push((
+                            self.cursor,
+                            Page::Albums,
+                            MusicItems::Albums(self.page_albums.clone()),
+                        ));
+                    } */
                     self.cursor = 0;
                     self.user_buff.clear();
                     self.mode = VimMode::Normal;
