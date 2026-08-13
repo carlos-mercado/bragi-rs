@@ -410,7 +410,7 @@ impl App {
                     self.cursor = 0;
                 }
                 KeyCode::Backspace => {
-                    if self.user_buff.is_empty() {
+                    if self.user_buff.is_empty() || self.user_buff == *("*") {
                         return;
                     }
                     self.user_buff.pop();
