@@ -3,6 +3,7 @@ use serde::Deserialize;
 #[derive(Deserialize, Debug)]
 pub struct Config {
     pub music_path: String,
+    pub library_sort: String,
 }
 
 impl Default for Config {
@@ -13,6 +14,7 @@ impl Default for Config {
                 .join("Music")
                 .to_string_lossy()
                 .to_string(),
+            library_sort: String::from("default"),
         }
     }
 }

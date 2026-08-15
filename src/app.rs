@@ -86,7 +86,20 @@ impl App {
         drop(init_sender);
         let (mut albums_unfiltered, mut songs_vec) = builder_handle.join().unwrap();
         songs_vec.sort();
-        albums_unfiltered.sort();
+
+        match config.library_sort.as_str() {
+            "last_played" => {
+                albums_unfiltered.sort_by_key(|a| Reverse(a.stats.0));
+            }
+            "duration_played" => {
+                albums_unfiltered.sort_by_key(|a| Reverse(a.stats.1));
+            }
+            "date_added" => {
+                albums_unfiltered.sort_by_key(|a| Reverse(a.stats.2));
+            }
+            _ => albums_unfiltered.sort(),
+        }
+
         let page_albums = albums_unfiltered.clone();
         let all_songs_unfiltered = songs_vec.clone();
 
@@ -365,9 +378,14 @@ impl App {
                     self.user_buff.clear();
                     self.album_selected = None;
 
+                    if self.selection_state_stack.len() == 1 {
+                        self.selection_state_stack[0].0 = self.cursor;
+                    }
+
                     if let Some((c, page, music_items)) = self.selection_state_stack.last() {
                         self.cursor = *c;
                         self.viewer = *page;
+
                         match music_items {
                             MusicItems::Albums(a) => self.page_albums = a.to_vec(),
                             MusicItems::Songs(s) => self.page_songs = s.to_vec(),
