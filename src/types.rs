@@ -61,6 +61,17 @@ pub enum MusicItems {
     Songs(Vec<TrackDetails>),
 }
 
+pub struct PlaylistEntry {
+    playlist: String,
+    time_added: u64,
+}
+
+impl<'a> From<&'a PlaylistEntry> for (&'a str, u64) {
+    fn from(value: &'a PlaylistEntry) -> Self {
+        (value.playlist.as_str(), value.time_added)
+    }
+}
+
 /*pub enum Item {
     Album(Album),
     Track(TrackDetails),
