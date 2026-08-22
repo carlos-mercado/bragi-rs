@@ -5,8 +5,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 // path => (last_played, duration_played, track_added)
 const TRACK_STATS: TableDefinition<&str, (u64, u64, u64)> = TableDefinition::new("tracks.db");
-// song_path => playlist
-const PLAYLISTS: MultimapTableDefinition<&str, &str> = MultimapTableDefinition::new("playlists.db");
+// song_path => (playlist_label, timestamp)
+const PLAYLISTS: MultimapTableDefinition<&str, (&str, u64)> =
+    MultimapTableDefinition::new("playlists.db");
 // song_path => metadata
 const TRACK_METADATA: TableDefinition<&str, &[u8]> = TableDefinition::new("track_metadata.db");
 
@@ -143,17 +144,23 @@ pub fn add_playlist_labels(db: &Database, query_path: &str, label: &str) -> Resu
     let write_tx = db.begin_write().expect("couldn't begin_write");
     {
         let mut table = write_tx.open_multimap_table(PLAYLISTS)?;
-        table.insert(query_path, label)?;
+        let time_now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        table.insert(query_path, (label, time_now))?;
     }
     write_tx.commit().expect("couldn't commit");
 
     Ok(())
 }
 
+// given a path to a song, return a list of playlists that
+// it belongs to
 pub fn get_playlist_labels(
     possible_db: Option<&Database>,
     query_path: &str,
-) -> Option<Vec<String>> {
+) -> Option<Vec<(String, u64)>> {
     let db = possible_db?;
 
     let read_txn = db.begin_read().ok()?;
@@ -161,17 +168,24 @@ pub fn get_playlist_labels(
     let values = table.get(query_path).ok()?;
     let mut labels_vec = Vec::new();
     for v in values {
-        labels_vec.push(v.ok()?.value().to_string());
+        let s = v.as_ref().ok()?.value().0.to_string();
+        let timestamp = v.ok()?.value().1;
+        labels_vec.push((s, timestamp));
     }
 
     Some(labels_vec)
 }
 
-pub fn remove_playlist_labels(db: &Database, query_path: &str, label: &str) -> Result<(), Error> {
+pub fn remove_playlist_labels(
+    db: &Database,
+    query_path: &str,
+    label: &str,
+    timestamp: u64,
+) -> Result<(), Error> {
     let write_tx = db.begin_write()?;
     {
         let mut table = write_tx.open_multimap_table(PLAYLISTS)?;
-        table.remove(query_path, label)?;
+        table.remove(query_path, (label, timestamp))?;
     }
     write_tx.commit()?;
     Ok(())
@@ -223,13 +237,8 @@ mod tests {
         db
     }
 
-    fn labels() -> Vec<String> {
-        vec![
-            "Post-Rock".to_string(),
-            "Prog".to_string(),
-            "gym".to_string(),
-            "spotify-wrapped_2025".to_string(),
-        ]
+    fn labels<'a>() -> Vec<&'a str> {
+        vec!["Post-Rock", "Prog", "gym", "spotify-wrapped_2025"]
     }
 
     #[test]
@@ -238,10 +247,23 @@ mod tests {
         let test_song = "/this/is/a/fakepath.mp3";
         let labels = labels();
 
+        /* let time_now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs(); */
+
         for (i, label) in labels.iter().enumerate() {
             add_playlist_labels(&db, test_song, label).unwrap();
-            let returned_labels = get_playlist_labels(Some(&db), test_song).unwrap();
-            assert_eq!(returned_labels, labels[..i + 1]);
+            let returned_labels: Vec<(String, u64)> =
+                get_playlist_labels(Some(&db), test_song).unwrap();
+
+            assert_eq!(
+                returned_labels
+                    .iter()
+                    .map(|(l, _)| l.clone())
+                    .collect::<Vec<String>>(),
+                labels[..i + 1]
+            );
         }
     }
 
@@ -252,7 +274,7 @@ mod tests {
         let labels = labels();
 
         for label in labels {
-            add_playlist_labels(&db, test_song, &label).unwrap();
+            add_playlist_labels(&db, test_song, label).unwrap();
         }
         wipe_playlist_labels(&db, test_song).unwrap();
 

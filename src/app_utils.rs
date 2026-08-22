@@ -1,4 +1,5 @@
 use music::{Album, TrackDetails};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 // Clamp the cursor after moving "down" a list of `len` items.
 // Never moves past the last valid index; a `len` of 0 stays at 0.
@@ -102,7 +103,11 @@ pub fn apply_add_label(
     label: &str,
 ) {
     with_matching_song_and_album_song(all_songs, albums, song_path, |s| {
-        s.tags.push(label.to_string())
+        let time_now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        s.tags.push((label.to_string(), time_now))
     });
 }
 
@@ -258,12 +263,23 @@ mod tests {
     #[test]
     fn apply_wipe_labels_clears_tags_in_both_places() {
         let mut song = track("Radiohead", "OK Computer", "Karma Police", "/a.mp3");
-        song.tags = vec!["favorite".to_string(), "rock".to_string()];
+        let time_now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        song.tags = vec![
+            ("favorite".to_string(), time_now),
+            ("rock".to_string(), time_now),
+        ];
         let mut album_song = song.clone();
 
         let mut all_songs = vec![song];
         let mut albums = vec![album("Radiohead", "OK Computer", vec![album_song.clone()])];
-        albums[0].songs[0].tags = vec!["favorite".to_string(), "rock".to_string()];
+        albums[0].songs[0].tags = vec![
+            ("favorite".to_string(), time_now),
+            ("rock".to_string(), time_now),
+        ];
         album_song.tags.clear();
 
         apply_wipe_labels(&mut all_songs, &mut albums, "/a.mp3");
@@ -283,7 +299,21 @@ mod tests {
 
         apply_add_label(&mut all_songs, &mut albums, "/a.mp3", "favorite");
 
-        assert_eq!(all_songs[0].tags, vec!["favorite".to_string()]);
-        assert_eq!(albums[0].songs[0].tags, vec!["favorite".to_string()]);
+        assert_eq!(
+            all_songs[0]
+                .tags
+                .iter()
+                .map(|(s, _)| s.clone())
+                .collect::<Vec<String>>(),
+            vec!["favorite".to_string()],
+        );
+        assert_eq!(
+            albums[0].songs[0]
+                .tags
+                .iter()
+                .map(|(s, _)| s.clone())
+                .collect::<Vec<String>>(),
+            vec!["favorite".to_string()]
+        );
     }
 }

@@ -841,9 +841,13 @@ impl App {
             LocalTrackUpdateType::AddLabel(_, label) => {
                 match self.viewer {
                     Page::Songs | Page::Search => {
+                        let time_now = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs();
                         self.page_songs[self.cursor]
                             .tags
-                            .push(self.user_buff.clone());
+                            .push((self.user_buff.clone(), time_now));
                     }
                     _ => {}
                 }

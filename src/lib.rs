@@ -39,7 +39,7 @@ pub struct TrackDetails {
     pub duration: u64,
     //         (last_played, duration_played, date_added)
     pub stats: (u64, u64, u64),
-    pub tags: Vec<String>,
+    pub tags: Vec<(String, u64)>,
 }
 
 #[derive(SchemaWrite, SchemaRead)]
@@ -148,12 +148,55 @@ impl From<&TrackDetails> for Text<'static> {
     }
 }
 
+// (last_played, duration_played, track_added)
+fn merge_stats(songs: &[TrackDetails]) -> (u64, u64, u64) {
+    // last_played should be min from the slice
+    // duration_played should be the total
+    // track_added should be the min
+    let mut base = (u64::MAX, 0, u64::MAX);
+
+    songs.iter().for_each(|s| {
+        let stats = s.stats;
+        base.0 = std::cmp::min(stats.0, base.0);
+        base.1 += stats.1;
+        base.2 = std::cmp::min(stats.2, base.2);
+    });
+
+    base
+}
+
+// build playlists and present them as psuedo-albums
+fn playlists_to_albums(playlists: HashMap<String, Vec<(TrackDetails, u64)>>) -> Vec<Album> {
+    let mut res = Vec::new();
+    for (playlist_lable, mut tracks) in playlists {
+        tracks.sort_by_key(|(_, timestamp)| *timestamp);
+        let songs = tracks
+            .iter()
+            .map(|(song, _timestamp)| song.clone())
+            .collect::<Vec<TrackDetails>>();
+
+        let stats = merge_stats(&songs);
+
+        res.push(Album {
+            artist: playlist_lable,
+            album: "".to_string(),
+            date: "".to_string(),
+            selected: false,
+            songs,
+            stats,
+        });
+    }
+
+    res
+}
+
 pub fn builder(
     song_listener: Receiver<TrackDetails>,
     db: Option<Arc<Database>>,
 ) -> (Vec<Album>, Vec<TrackDetails>) {
     let mut albums_hashmap: HashMap<(String, String), Album> = HashMap::new();
     let mut all_songs = Vec::new();
+    let mut playlist_to_tracks: HashMap<String, Vec<(TrackDetails, u64)>> = HashMap::new();
 
     loop {
         match song_listener.try_recv() {
@@ -165,9 +208,9 @@ pub fn builder(
                 let album = albums_hashmap
                     .entry((artist.clone(), album_title.clone()))
                     .or_insert(Album {
-                        artist,
+                        artist: artist.clone(),
                         album: album_title,
-                        date,
+                        date: date.clone(),
                         selected: false,
                         songs: Vec::new(),
                         stats: track.stats,
@@ -181,6 +224,13 @@ pub fn builder(
                 album.stats.1 += track.stats.1;
                 // date_added: take the earliest
                 album.stats.2 = album.stats.2.min(track.stats.2);
+
+                for (playlist_label, timestamp) in &track.tags {
+                    let playlist_tracks = playlist_to_tracks
+                        .entry(playlist_label.to_string())
+                        .or_default();
+                    playlist_tracks.push((track.clone(), *timestamp));
+                }
             }
             Err(TryRecvError::Disconnected) => break,
             Err(TryRecvError::Empty) => {}
@@ -191,13 +241,15 @@ pub fn builder(
     let _result = insert_batch(db.as_deref(), &all_songs);
 
     all_songs.sort();
-    let albums: Vec<Album> = albums_hashmap
+    let mut albums: Vec<Album> = albums_hashmap
         .values_mut()
         .map(|a| {
             a.songs.sort();
             a.clone()
         })
         .collect();
+    let mut playlists = playlists_to_albums(playlist_to_tracks);
+    albums.append(&mut playlists);
     (albums, all_songs)
 }
 
@@ -271,7 +323,10 @@ fn extract_music_from_dir(
                 && let Some(metadata) =
                     get_cached_metadata(db.unwrap(), file_path.to_str().unwrap_or_default())
             {
-                let tags = get_playlist_labels(db, file_path.to_str().unwrap()).unwrap_or_default();
+                let mut tags: Vec<(String, u64)> =
+                    get_playlist_labels(db, file_path.to_str().unwrap()).unwrap_or_default();
+                tags.sort_by_key(|(_, time)| *time);
+
                 let time_now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap()
@@ -362,7 +417,7 @@ pub fn filter_tracks(tracks: &[TrackDetails], query: &str) -> Vec<TrackDetails> 
             t.artist.to_lowercase().contains(&q)
                 || t.album.to_lowercase().contains(&q)
                 || t.title.to_lowercase().contains(&q)
-                || t.tags.contains(&q)
+                || t.tags.iter().any(|(label, _)| label == &q)
         })
         .cloned()
         .collect()
