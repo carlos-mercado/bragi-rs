@@ -241,7 +241,7 @@ impl App {
             Err(_) => {}
         };
 
-        if event::poll(Duration::from_millis(500))? {
+        if event::poll(Duration::from_millis(100))? {
             match event::read()? {
                 Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
                     self.handle_key_event(key_event)
@@ -258,6 +258,7 @@ impl App {
                 KeyCode::Char('q') => self.exit(),
                 KeyCode::Char('j') => self.increment_counter(),
                 KeyCode::Char('k') => self.decrement_counter(),
+                KeyCode::Char(c @ '0'..='9') => self.user_buff.push(c),
                 KeyCode::Char('h') => self.prev_song(),
                 KeyCode::Char('l') => self.next_song(),
                 KeyCode::Char('/') => {
@@ -712,22 +713,34 @@ impl App {
     }
 
     fn increment_counter(&mut self) {
+        let by: usize = if self.user_buff.is_empty() {
+            1
+        } else {
+            self.user_buff.parse().unwrap_or(1)
+        };
+        self.user_buff.clear();
         match self.viewer {
             Page::Albums => {
-                self.cursor = clamp_cursor_increment(self.cursor, self.page_albums.len());
+                self.cursor = clamp_cursor_increment(self.cursor, self.page_albums.len(), by);
                 self.albums_cursor = self.cursor;
             }
             Page::Songs | Page::Search => {
-                self.cursor = clamp_cursor_increment(self.cursor, self.page_songs.len());
+                self.cursor = clamp_cursor_increment(self.cursor, self.page_songs.len(), by);
             }
         }
     }
 
     fn decrement_counter(&mut self) {
+        let by: usize = if self.user_buff.is_empty() {
+            1
+        } else {
+            self.user_buff.parse().unwrap_or(1)
+        };
+        self.user_buff.clear();
         if self.viewer == Page::Albums {
-            self.albums_cursor = clamp_cursor_decrement(self.cursor);
+            self.albums_cursor = clamp_cursor_decrement(self.cursor, by);
         }
-        self.cursor = clamp_cursor_decrement(self.cursor);
+        self.cursor = clamp_cursor_decrement(self.cursor, by);
     }
 
     fn next_song(&mut self) {

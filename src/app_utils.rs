@@ -3,16 +3,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 // Clamp the cursor after moving "down" a list of `len` items.
 // Never moves past the last valid index; a `len` of 0 stays at 0.
-pub fn clamp_cursor_increment(cursor: usize, len: usize) -> usize {
+pub fn clamp_cursor_increment(cursor: usize, len: usize, by: usize) -> usize {
     if len == 0 {
         return 0;
     }
-    std::cmp::min(len - 1, cursor + 1)
+    std::cmp::min(len - 1, cursor + by)
 }
 
 // Clamp the cursor after moving "up" a list. Never goes below 0.
-pub fn clamp_cursor_decrement(cursor: usize) -> usize {
-    cursor.saturating_sub(1)
+pub fn clamp_cursor_decrement(cursor: usize, by: usize) -> usize {
+    cursor.saturating_sub(by)
 }
 
 // Returns the next playlist index, or `None` if `current` is already
@@ -143,28 +143,36 @@ mod tests {
 
     #[test]
     fn clamp_increment_moves_cursor_forward() {
-        assert_eq!(clamp_cursor_increment(0, 5), 1);
-        assert_eq!(clamp_cursor_increment(3, 5), 4);
+        assert_eq!(clamp_cursor_increment(0, 5, 1), 1);
+        assert_eq!(clamp_cursor_increment(3, 5, 1), 4);
+    }
+
+    #[test]
+    fn clamp_increment_moves_cursor_forward_n_times() {
+        assert_eq!(clamp_cursor_increment(0, 5, 3), 3);
+        assert_eq!(clamp_cursor_increment(0, 5, 2), 2);
     }
 
     #[test]
     fn clamp_increment_stops_at_last_index() {
-        assert_eq!(clamp_cursor_increment(4, 5), 4);
+        assert_eq!(clamp_cursor_increment(4, 5, 1), 4);
+        assert_eq!(clamp_cursor_increment(4, 5, 10), 4);
+        assert_eq!(clamp_cursor_increment(0, 5, 5), 4);
     }
 
     #[test]
     fn clamp_increment_empty_list_stays_zero() {
-        assert_eq!(clamp_cursor_increment(0, 0), 0);
+        assert_eq!(clamp_cursor_increment(0, 0, 1), 0);
     }
 
     #[test]
     fn clamp_decrement_moves_cursor_back() {
-        assert_eq!(clamp_cursor_decrement(3), 2);
+        assert_eq!(clamp_cursor_decrement(3, 1), 2);
     }
 
     #[test]
     fn clamp_decrement_stops_at_zero() {
-        assert_eq!(clamp_cursor_decrement(0), 0);
+        assert_eq!(clamp_cursor_decrement(0, 1), 0);
     }
 
     // ---- next_index / prev_index ----

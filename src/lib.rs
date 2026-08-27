@@ -18,7 +18,7 @@ pub mod config;
 pub mod db;
 use crate::db::*;
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Album {
     pub artist: String,
     pub album: String,
@@ -459,6 +459,9 @@ pub fn get_embedded_song_art(song: &TrackDetails) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
+    use lofty::tag::items::popularimeter::WindowsMediaPlayerProvider;
+    use ratatui::macros::ratatui_core::assert_buffer_eq;
+
     use super::*;
 
     fn track(artist: &str, album: &str, title: &str) -> TrackDetails {
@@ -723,5 +726,95 @@ mod tests {
             .find(|a| a.album == "The Wall")
             .expect("The Wall album should exist");
         assert_eq!(the_wall.songs.len(), 1);
+    }
+
+    // (last_played, duration_played, date_added);
+    fn track2(artist: &str, album: &str, title: &str, stats: (u64, u64, u64)) -> TrackDetails {
+        TrackDetails {
+            artist: artist.to_string(),
+            album: album.to_string(),
+            title: title.to_string(),
+            track_no: 1,
+            date: "2020".to_string(),
+            song_path: format!("/fake/{title}.mp3"),
+            duration: 180,
+            stats,
+            tags: Vec::new(),
+        }
+    }
+
+    fn tracks2() -> Vec<TrackDetails> {
+        vec![
+            track2(
+                "Tim Hecker",
+                "Virgins",
+                "Amps, Drugs, Harmonium",
+                (1, 200, 10),
+            ),
+            track2(
+                "Stars of the Lid",
+                "Tired Sounds",
+                "Piano Aquieu",
+                (2, 150, 5),
+            ),
+            track2(
+                "Grouper",
+                "Dragging a Dead Deer Up a Hill",
+                "Stuck",
+                (10, 150, 1),
+            ),
+            track2(
+                "Ana Roxanne",
+                "~~~",
+                "It's A Rainy Day On The Cosmic Shore",
+                (30, 0, 20),
+            ),
+        ]
+    }
+
+    #[test]
+    // make sure stats_merge() correctly combines stats for a set of tracks
+    fn test_stats_merge() {
+        let songs = Vec::new();
+        assert_eq!(merge_stats(&songs), (u64::MAX, 0, u64::MAX));
+
+        let songs = tracks2();
+        assert_eq!(merge_stats(&songs), (1, 500, 1));
+    }
+
+    #[test]
+    fn test_play_to_alb() {
+        let mut playlists: HashMap<String, Vec<(TrackDetails, u64)>> = HashMap::new();
+
+        let tracks = tracks2();
+        let timestamps = (1..tracks.len() as u64 + 1).collect::<Vec<u64>>();
+        let zipped: Vec<(TrackDetails, u64)> = tracks.into_iter().zip(timestamps).collect();
+        playlists.insert("Liked".to_string(), zipped);
+
+        let tracks = tracks2();
+        let timestamps = (1..tracks.len() as u64 + 1).collect::<Vec<u64>>();
+        let zipped: Vec<(TrackDetails, u64)> = tracks.into_iter().zip(timestamps).collect();
+        playlists.insert("Gym".to_string(), zipped);
+
+        let target_album_liked = Album {
+            artist: "Liked".to_string(),
+            album: "".to_string(),
+            date: "".to_string(),
+            selected: false,
+            songs: tracks2(),
+            stats: merge_stats(&tracks2()),
+        };
+
+        let target_album_gym = Album {
+            artist: "Gym".to_string(),
+            album: "".to_string(),
+            date: "".to_string(),
+            selected: false,
+            songs: tracks2(),
+            stats: merge_stats(&tracks2()),
+        };
+
+        let albums = playlists_to_albums(playlists);
+        assert_eq!(albums, vec![target_album_gym, target_album_liked]);
     }
 }
