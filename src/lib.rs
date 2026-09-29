@@ -32,6 +32,7 @@ pub struct Album {
 pub struct TrackDetails {
     pub artist: String,
     pub album: String,
+    pub disk: u32,
     pub track_no: u32,
     pub title: String,
     pub date: String,
@@ -46,6 +47,7 @@ pub struct TrackDetails {
 pub struct TrackMetadata {
     pub artist: String,
     pub album: String,
+    pub disk: u32,
     pub track_no: u32,
     pub title: String,
     pub date: String,
@@ -62,6 +64,7 @@ impl From<TrackDetails> for TrackMetadata {
             title: song.title.clone(),
             date: song.date.clone(),
             song_path: song.song_path.clone(),
+            disk: song.disk,
             duration: song.duration,
         }
     }
@@ -111,6 +114,7 @@ impl Default for TrackDetails {
             artist: "Unknown Artist".to_string(),
             album: "Unknown Album".to_string(),
             track_no: 0,
+            disk: 1,
             title: "Unknown Title".to_string(),
             date: "1900".to_string(),
             song_path: "None".to_string(),
@@ -343,6 +347,7 @@ fn extract_music_from_dir(
                         track_no: metadata.track_no,
                         title: metadata.title,
                         date: metadata.date,
+                        disk: metadata.disk,
                         song_path: metadata.song_path,
                         duration: metadata.duration,
                         stats,
@@ -399,6 +404,7 @@ fn get_audio_metadata(path: &Path, db: Option<&Database>) -> TrackDetails {
             })
             .to_string(),
         track_no: tag.track().unwrap_or(0),
+        disk: tag.disk().unwrap_or_default(),
         duration: tagged_file.properties().duration().as_secs(),
         stats: read_or_insert(db, &song_path).unwrap_or((0, 0, time_now)),
         tags: get_playlist_labels(db, &song_path).unwrap_or_default(),
@@ -459,9 +465,6 @@ pub fn get_embedded_song_art(song: &TrackDetails) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use lofty::tag::items::popularimeter::WindowsMediaPlayerProvider;
-    use ratatui::macros::ratatui_core::assert_buffer_eq;
-
     use super::*;
 
     fn track(artist: &str, album: &str, title: &str) -> TrackDetails {
@@ -469,6 +472,7 @@ mod tests {
             artist: artist.to_string(),
             album: album.to_string(),
             title: title.to_string(),
+            disk: 0,
             track_no: 1,
             date: "2020".to_string(),
             song_path: "/fake/path.mp3".to_string(),
@@ -733,6 +737,7 @@ mod tests {
         TrackDetails {
             artist: artist.to_string(),
             album: album.to_string(),
+            disk: 0,
             title: title.to_string(),
             track_no: 1,
             date: "2020".to_string(),
@@ -780,6 +785,40 @@ mod tests {
 
         let songs = tracks2();
         assert_eq!(merge_stats(&songs), (1, 500, 1));
+    }
+
+    #[test]
+    fn test_sort_order() {
+        let mut songs = [
+            TrackDetails {
+                artist: "Test1".to_string(),
+                album: "Alb".to_string(),
+                disk: 2,
+                track_no: 1,
+                title: "This is song one of disk two".to_string(),
+                date: "".to_string(),
+                song_path: "".to_string(),
+                duration: 0,
+                stats: (0, 0, 0),
+                tags: Vec::new(),
+            },
+            TrackDetails {
+                artist: "Test1".to_string(),
+                album: "Alb".to_string(),
+                disk: 1,
+                track_no: 1,
+                title: "This is song one".to_string(),
+                date: "".to_string(),
+                song_path: "".to_string(),
+                duration: 0,
+                stats: (0, 0, 0),
+                tags: Vec::new(),
+            },
+        ];
+        songs.sort();
+
+        assert_eq!(songs[0].disk, 1);
+        assert_eq!(songs[1].disk, 2);
     }
 
     #[test]

@@ -121,6 +121,7 @@ mod tests {
             album: album.to_string(),
             title: title.to_string(),
             track_no: 1,
+            disk: 1,
             date: "2020".to_string(),
             song_path: song_path.to_string(),
             duration: 180,

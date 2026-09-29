@@ -300,6 +300,7 @@ mod tests {
             title: title.to_string(),
             track_no: 1,
             date: "2020".to_string(),
+            disk: 0,
             song_path: song_path.to_string(),
             duration: 180,
             stats: (0, 0, 0),
