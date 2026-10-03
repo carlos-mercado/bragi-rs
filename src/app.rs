@@ -1,6 +1,6 @@
 use crate::app_utils::*;
 use crate::types::*;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use lru::LruCache;
 use music::config::config_init;
 use music::{Album, TrackDetails, filter_albums, filter_tracks};
@@ -23,13 +23,14 @@ use std::time::{Duration, Instant};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // (bytes, protocol)
-pub type AlbumArtInfo = (Vec<u8>, Arc<RwLock<StatefulProtocol>>);
+type AlbumArtInfo = (Vec<u8>, Arc<RwLock<StatefulProtocol>>);
 
 pub struct App {
     pub exit: bool,
     pub mode: VimMode,
     pub cursor: usize,
     pub viewer: Page,
+    pub selection_area_height: u16,
 
     // all_songs are the songs that are produced
     // after running all_songs_unfiltered
@@ -120,6 +121,7 @@ impl App {
                 Page::Albums,
                 MusicItems::Albums(albums_unfiltered.clone()),
             )],
+            selection_area_height: 0,
             cursor: 0,
             exit: false,
             page_songs: songs_vec,
@@ -159,7 +161,10 @@ impl App {
 
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         while !self.exit {
-            terminal.draw(|frame| self.draw(frame))?;
+            terminal.draw(|frame| {
+                self.draw(frame);
+                self.selection_area_height = (frame.area().height - 2) / 2;
+            })?;
             self.handle_events()?;
         }
         Ok(())
@@ -261,6 +266,16 @@ impl App {
                 KeyCode::Char(c @ '0'..='9') => self.user_buff.push(c),
                 KeyCode::Char('h') => self.prev_song(),
                 KeyCode::Char('l') => self.next_song(),
+                KeyCode::Char('f') => {
+                    if key_event.modifiers.contains(KeyModifiers::CONTROL) {
+                        self.inc_by(self.selection_area_height as usize);
+                    }
+                }
+                KeyCode::Char('b') => {
+                    if key_event.modifiers.contains(KeyModifiers::CONTROL) {
+                        self.dec_by(self.selection_area_height as usize);
+                    }
+                }
                 KeyCode::Char('/') => {
                     self.mode = VimMode::Search;
                 }
@@ -712,6 +727,25 @@ impl App {
         self.exit = true;
     }
 
+    fn inc_by(&mut self, by: usize) {
+        match self.viewer {
+            Page::Albums => {
+                self.cursor = clamp_cursor_increment(self.cursor, self.page_albums.len(), by);
+                self.albums_cursor = self.cursor;
+            }
+            Page::Songs | Page::Search => {
+                self.cursor = clamp_cursor_increment(self.cursor, self.page_songs.len(), by);
+            }
+        }
+    }
+
+    fn dec_by(&mut self, by: usize) {
+        if self.viewer == Page::Albums {
+            self.albums_cursor = clamp_cursor_decrement(self.cursor, by);
+        }
+        self.cursor = clamp_cursor_decrement(self.cursor, by);
+    }
+
     fn increment_counter(&mut self) {
         let by: usize = if self.user_buff.is_empty() {
             1
@@ -1085,5 +1119,9 @@ impl App {
                 }
             }
         });
+    }
+
+    pub fn set_height(&mut self, h: u16) {
+        self.selection_area_height = h;
     }
 }
